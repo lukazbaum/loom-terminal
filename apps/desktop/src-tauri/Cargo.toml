@@ -36,7 +36,6 @@ serde_json = { workspace = true }
 portable-pty = { workspace = true }
 base64 = { workspace = true }
 uuid = { workspace = true }
-rand = { workspace = true }
 regex = { workspace = true }
 memchr = "2"
 # Faster, non-poisoning Mutex. Used everywhere lock contention is on
@@ -46,8 +45,10 @@ parking_lot = "0.12"
 # `port_detect::url_is_ready`. Replaces a `Command::new("curl")` shell-out
 # that broke on minimalist macOS images and Windows curl variants whose
 # `-w` flag formatting differs, and which forked a process per port-probe
-# tick. `rustls-tls` (not `native-tls`) so no OpenSSL build dependency.
-ureq = { version = "2", default-features = false, features = ["rustls"] }
+# tick. The `tls` umbrella feature pulls in rustls + webpki + webpki-roots
+# (no OpenSSL build dependency); needed for HTTPS tunnel hosts like
+# ngrok / trycloudflare / loca.lt that the URL detector accepts.
+ureq = { version = "2", default-features = false, features = ["tls"] }
 # `NamedTempFile` powers `atomic_write::write`'s tempfile creation —
 # uses the OS RNG for the suffix (where we previously hand-rolled it
 # with `rand::thread_rng`) and unlinks on Drop if persist isn't called,
