@@ -1,0 +1,89 @@
+# Dependabot ships JS dependency PRs that update `package.json` but
+# leave `bun.lock` stale — Dependabot doesn't natively understand bun's
+# lockfile format yet (https://github.com/dependabot/dependabot-core/issues/8542).
+# CI's `bun install --frozen-lockfile` step then fails on every npm bump
+# with "lockfile had changes, but lockfile is frozen".
+#
+# This workflow runs on PRs from `dependabot/npm_and_yarn/*` branches,
+# regenerates `bun.lock`, and commits the result back to the PR's branch.
+# After that push lands, the regular CI workflow re-runs against the
+# updated lock and the PR can be merged like any other.
+
+name: Dependabot — sync bun.lock
+
+on:
+  # Auto trigger paused to control Actions billing — re-enable by
+  # uncommenting the `pull_request_target` block below. Until then,
+  # Dependabot npm PRs will need their bun.lock refreshed manually
+  # before CI passes.
+  # pull_request_target:
+  #   branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync-bun-lock:
+    name: Refresh bun.lock for Dependabot npm PRs
+    runs-on: ubuntu-latest
+    # Only run for the bun-lock-affecting Dependabot branches. The
+    # github-actions and cargo ecosystems don't touch package.json.
+    if: |
+      github.actor == 'dependabot[bot]' &&
+      startsWith(github.head_ref, 'dependabot/npm_and_yarn/')
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.head_ref }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          # We push back to the same branch; need the actual token,
+          # not the read-only one pull_request_target hands out by default.
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      # Without --frozen-lockfile bun will regenerate / sync bun.lock
+      # against the updated package.json. Then commit the result back.
+      # --ignore-scripts is critical: this job runs on pull_request_target
+      # with `contents: write`, so a malicious lifecycle script in a
+      # Dependabot-proposed package could otherwise take over the repo.
+      # Belt-and-suspenders with root package.json's empty
+      # `trustedDependencies` (Bun's own allowlist).
+      - name: bun install (refresh lock)
+        run: bun install --ignore-scripts
+
+      - name: Commit lock if it changed
+        id: commit
+        run: |
+          if git diff --quiet bun.lock; then
+            echo "bun.lock already in sync"
+            echo "pushed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "dependabot[bot]"
+          git config user.email "49699333+dependabot[bot]@users.noreply.github.com"
+          git add bun.lock
+          git commit -m "Refresh bun.lock for $GITHUB_HEAD_REF"
+          git push origin HEAD:"$GITHUB_HEAD_REF"
+          echo "pushed=true" >> "$GITHUB_OUTPUT"
+
+      # GitHub blocks workflows from re-firing on a GITHUB_TOKEN push
+      # (anti-loop protection), so the lock refresh above won't on its
+      # own re-trigger the `pull_request` event that drives the PR's
+      # check list. Dispatch CI explicitly so a green run lands on the
+      # Actions tab against the refreshed branch. The PR's own check
+      # list still shows the pre-refresh state; the user merges based
+      # on the dispatched run (visible at
+      # https://github.com/<org>/<repo>/actions). A fuller fix needs a
+      # PAT with workflow scope — out of scope for this token-only setup.
+      - name: Dispatch CI against the refreshed branch
+        if: steps.commit.outputs.pushed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh workflow run ci.yml --ref "$GITHUB_HEAD_REF" \
+            --repo "${{ github.event.pull_request.head.repo.full_name }}"

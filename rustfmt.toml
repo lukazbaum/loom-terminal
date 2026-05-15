@@ -1,0 +1,8 @@
+# Repo-wide rustfmt config. Tracks the stable defaults explicitly so a
+# future rustfmt release that bumps a default doesn't quietly re-format
+# the codebase. CI runs `cargo fmt --check` so any drift fails the PR.
+edition = "2021"
+max_width = 100
+hard_tabs = false
+tab_spaces = 4
+use_small_heuristics = "Default"

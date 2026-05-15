@@ -1,0 +1,47 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+
+    /* Linting */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    /* T | undefined for array[i] and dynamic obj[key] — catches the
+       "Cannot read properties of undefined" class of runtime crashes
+       at compile time. Important in this codebase where pane/workspace
+       state is heavily map-keyed. */
+    "noUncheckedIndexedAccess": true,
+    /* Require `override` keyword on inherited method overrides. We don't
+       have classes in the app today, but it's free guardrails for the
+       moment someone introduces one. */
+    "noImplicitOverride": true,
+    /* Prevent Linux-only build breakage when a macOS contributor writes
+       `import Foo from "./foo"` — HFS+/APFS are case-insensitive by
+       default so the import resolves locally, but ext4 (Linux CI,
+       contributor laptops) is case-sensitive and would 404 on the
+       same module. Free guardrails. */
+    "forceConsistentCasingInFileNames": true
+    /* `exactOptionalPropertyTypes` was evaluated and turned off: the
+       state types here (Pane, Session, PersistedWorkspace, …) are
+       constructed at many sites with `{ name: maybeString, … }` where
+       `maybeString: string | undefined`. Honoring the flag would
+       require either widening every optional to `string | undefined`
+       (which defeats the lint) or rewriting the constructors to
+       spread-omit (a non-trivial behavior-sensitive refactor across
+       ~30 sites). Revisit when the persistence layer gets a typed
+       serializer. */
+  }
+}

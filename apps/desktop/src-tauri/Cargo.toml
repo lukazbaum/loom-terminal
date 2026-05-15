@@ -1,0 +1,63 @@
+[package]
+name = "loom"
+version.workspace = true
+description = "Parallel coding-agent terminals in one window."
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["terminal", "tauri", "coding-agent", "claude"]
+categories = ["development-tools"]
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "loom_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+# Capitalize the binary so macOS shows "Loom" (not "loom") in the dock during dev.
+[[bin]]
+name = "Loom"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-log = "2"
+log = "0.4"
+serde = { workspace = true }
+serde_json = { workspace = true }
+portable-pty = { workspace = true }
+base64 = { workspace = true }
+uuid = { workspace = true }
+rand = { workspace = true }
+regex = { workspace = true }
+memchr = "2"
+# Faster, non-poisoning Mutex. Used everywhere lock contention is on
+# the hot path (PTY reader threads).
+parking_lot = "0.12"
+# In-process HTTP client for the dev-server URL HEAD probe in
+# `port_detect::url_is_ready`. Replaces a `Command::new("curl")` shell-out
+# that broke on minimalist macOS images and Windows curl variants whose
+# `-w` flag formatting differs, and which forked a process per port-probe
+# tick. `rustls-tls` (not `native-tls`) so no OpenSSL build dependency.
+ureq = { version = "2", default-features = false, features = ["rustls"] }
+# `NamedTempFile` powers `atomic_write::write`'s tempfile creation —
+# uses the OS RNG for the suffix (where we previously hand-rolled it
+# with `rand::thread_rng`) and unlinks on Drop if persist isn't called,
+# so a panicked write doesn't leak `.tmp.*` files in the user's config
+# directory.
+tempfile = "3"
+
+[dev-dependencies]
+# `kill(pid, 0)` probe for the ChildGuard::Drop test — verifies a
+# dropped guard actually delivered SIGKILL by asserting the child is
+# gone (ESRCH). Unix-only; the test is gated on `#[cfg(unix)]`.
+[target.'cfg(unix)'.dev-dependencies]
+libc = "0.2"

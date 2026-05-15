@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  # Auto trigger paused to control Actions billing — re-enable by
+  # uncommenting the `push` block below. `workflow_dispatch` stays on
+  # so a release can still be cut manually from the Actions tab.
+  # push:
+  #   tags:
+  #     - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release (must already exist on the branch)"
+        required: true
+
+# Each tag-triggered run produces one draft release; the matrix below
+# uploads platform artifacts to it.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            label: macOS (Apple Silicon)
+          - os: macos-13
+            target: x86_64-apple-darwin
+            label: macOS (Intel)
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            label: Linux (x86_64)
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: Windows (x86_64)
+
+    name: Build ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install Tauri system dependencies (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      # SHA-pinned per workflow-supply-chain hardening. The trailing `# tag`
+      # comment is the human-readable version Dependabot's github-actions
+      # ecosystem will bump for us.
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+          key: release-${{ matrix.target }}
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+
+      # tauri-action handles the cross-platform invocation of
+      # `tauri build` and uploads the bundle to the draft release. We
+      # do NOT sign / notarize — that requires the Apple Developer ID
+      # secret which isn't configured yet. Users will see the macOS
+      # Gatekeeper warning until signing lands.
+      #
+      # SHA-pinned because this job runs with `contents: write` (release
+      # tag + asset upload). The trailing `# v0` comment is what
+      # Dependabot's github-actions ecosystem watches to bump us.
+      - uses: tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseName: "Loom ${{ github.event.inputs.tag || github.ref_name }}"
+          releaseBody: |
+            See [CHANGELOG.md](https://github.com/lukazbaum/loom-terminal/blob/main/CHANGELOG.md)
+            for the changes in this release.
+
+            **Unsigned builds.** macOS users may need to right-click → Open
+            the first time, or run `xattr -d com.apple.quarantine /Applications/Loom.app`
+            to clear the Gatekeeper warning. Signing + notarization is on the roadmap.
+          releaseDraft: true
+          prerelease: false
+          args: --target ${{ matrix.target }}

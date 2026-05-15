@@ -1,0 +1,36 @@
+# Weekly dependency PRs for both ecosystems.
+#
+# Grouping strategy: keep major-version bumps separate so they get the
+# review attention they deserve, but bundle minor/patch updates per
+# ecosystem so the PR queue doesn't fan out into ten patch bumps.
+
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: npm
+    # bun.lock lives at repo root; npm is the closest ecosystem tag.
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3

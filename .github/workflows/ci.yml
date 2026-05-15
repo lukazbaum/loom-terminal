@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  # Auto triggers paused to control Actions billing — re-enable when
+  # ready by uncommenting the `push` and `pull_request` blocks below.
+  # `workflow_dispatch` stays on so the workflow can still be run by
+  # hand from the Actions tab.
+  # push:
+  #   branches: [main]
+  # pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    # Matrix: Linux is the cheapest runner so the bulk of checks live
+    # there; macOS catches the platform-specific bits — shell_env.rs
+    # resolves `/opt/homebrew` / `~/.claude/local` paths that only exist
+    # on Darwin, and portable-pty / Tauri itself can break differently
+    # per OS. Windows is deferred until release.yml needs it.
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - name: Install Tauri system dependencies (Linux only)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      # SHA-pinned per workflow-supply-chain hardening. The trailing `# tag`
+      # comment is the human-readable version Dependabot's github-actions
+      # ecosystem will bump for us.
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+          # Per-OS cache so the macOS job doesn't pull a Linux target dir.
+          key: ${{ matrix.os }}
+
+      - name: cargo fmt --check
+        run: cargo fmt --manifest-path apps/desktop/src-tauri/Cargo.toml --all -- --check
+
+      - name: cargo check
+        run: cargo check --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
+
+      - name: cargo clippy
+        run: cargo clippy --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml --all-targets
+
+  audit:
+    # Surfaces known-CVE-tagged dependencies. Decoupled from the main
+    # rust job so an advisory in a transitive dep doesn't block a fix
+    # PR — the job still fails on advisories so the dashboard catches
+    # it, but the merge gate stays on `rust` + `frontend`.
+    name: Rust (cargo audit)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+      - uses: Swatinem/rust-cache@42dc69e1aa15d09112580998cf2ef0119e2e91ae # v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+          key: audit
+      - name: Install cargo-audit
+        run: cargo install --locked cargo-audit
+      # Cargo.lock lives at the workspace root, not under the crate dir.
+      - name: cargo audit
+        run: cargo audit --file Cargo.lock
+
+  frontend:
+    name: Frontend (tsc + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      # Cache bun's global install dir keyed on the lockfile so a re-run
+      # with the same deps skips the network entirely.
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            bun-${{ runner.os }}-
+
+      # `--frozen-lockfile` makes CI refuse to update bun.lock — if
+      # package.json drifted from the lock without a fresh `bun install`,
+      # the build fails fast instead of quietly running on stale deps.
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Biome runs the formatter check + the (relaxed) lint pass. Format
+      # drift fails CI explicitly so a stale `bun run format` doesn't
+      # land alongside real changes.
+      - name: Biome format check
+        run: bun run format:check
+
+      - name: Biome lint
+        run: bun run lint
+
+      # Frontend unit tests — bun's built-in runner, currently covering
+      # the persistence layer (parsePersistedPane / loadSession /
+      # resumeAwareCommand / isSessionAgent). Excluded from the vite
+      # build via tsconfig so the `bun:test` import doesn't choke tsc.
+      - name: Frontend tests
+        run: bun test apps/desktop/src
+
+      - name: Build (tsc + vite)
+        run: bun run build
