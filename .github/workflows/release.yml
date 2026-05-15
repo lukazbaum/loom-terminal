@@ -1,12 +1,11 @@
 name: Release
 
 on:
-  # Auto trigger paused to control Actions billing — re-enable by
-  # uncommenting the `push` block below. `workflow_dispatch` stays on
-  # so a release can still be cut manually from the Actions tab.
-  # push:
-  #   tags:
-  #     - "v*"
+  push:
+    tags:
+      - "v*"
+  # `workflow_dispatch` stays on so a release can also be cut manually
+  # from the Actions tab against an existing tag.
   workflow_dispatch:
     inputs:
       tag:

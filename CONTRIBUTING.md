@@ -1,16 +1,10 @@
 # Contributing
 
 Thanks for considering a contribution. Loom is pre-1.0; bug reports,
-fixes, and feature ideas are all welcome.
-
-> **Heads-up on CI:** workflow auto-triggers are paused while the
-> project is in early-launch mode, so your PR won't show a green
-> check. The maintainer runs the local `bun run check` umbrella
-> before merging — see step 4 below. If a PR has been sitting for a
-> few days without a response, ping in [Discussions][disc] or in the
-> PR itself.
-
-[disc]: https://github.com/lukazbaum/loom-terminal/discussions
+fixes, and feature ideas are all welcome. If a PR has been sitting
+for a few days without a response, ping in
+[Discussions](https://github.com/lukazbaum/loom-terminal/discussions)
+or in the PR itself.
 
 ## Building locally
 

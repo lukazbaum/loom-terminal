@@ -1,13 +1,9 @@
 name: CI
 
 on:
-  # Auto triggers paused to control Actions billing — re-enable when
-  # ready by uncommenting the `push` and `pull_request` blocks below.
-  # `workflow_dispatch` stays on so the workflow can still be run by
-  # hand from the Actions tab.
-  # push:
-  #   branches: [main]
-  # pull_request:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 concurrency:

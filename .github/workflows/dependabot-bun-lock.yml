@@ -12,12 +12,8 @@
 name: Dependabot — sync bun.lock
 
 on:
-  # Auto trigger paused to control Actions billing — re-enable by
-  # uncommenting the `pull_request_target` block below. Until then,
-  # Dependabot npm PRs will need their bun.lock refreshed manually
-  # before CI passes.
-  # pull_request_target:
-  #   branches: [main]
+  pull_request_target:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
