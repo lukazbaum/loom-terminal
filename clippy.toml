@@ -1,0 +1,5 @@
+# clippy thresholds. Defaults are usually fine; this file exists so that
+# when we want to nudge a specific lint (lint level, threshold, allow
+# list) there's a home for it instead of scattering `#[allow(...)]`
+# attributes across the source. Empty for now — CI runs `clippy -D warnings`
+# at the default level which has been sufficient.

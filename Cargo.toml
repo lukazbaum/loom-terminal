@@ -1,0 +1,32 @@
+[workspace]
+members = [
+    "apps/desktop/src-tauri",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Lukas Baum <lukas@lukasbaum.dev>"]
+license = "MIT"
+repository = "https://github.com/lukazbaum/loom-terminal"
+homepage = "https://github.com/lukazbaum/loom-terminal"
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+rand = "0.8"
+portable-pty = "0.9"
+base64 = "0.22"
+regex = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+# unwind, not abort: lets `catch_unwind` in the MCP worker pool and URL
+# probe thread recover from tool panics instead of bringing the whole
+# webview down with the process.
+panic = "unwind"
+strip = true

@@ -1,0 +1,18 @@
+# Pin the Rust toolchain a contributor's `cargo` invocation will resolve
+# to, so a `cargo check` locally matches what CI runs without having to
+# rely on `dtolnay/rust-toolchain@stable` racing the upstream release.
+#
+# `channel` tracks the latest stable release minor; rustup auto-installs
+# the matching binary on first `cargo` invocation in this directory.
+# Components are the ones CI gates on (fmt + clippy); without them
+# pinned here a fresh `rustup default stable` would miss them and the
+# pre-push `bun run check` umbrella would fail on the format / lint
+# step before even compiling.
+#
+# Bump the channel when CI starts using a newer compiler feature.
+# Dependabot doesn't watch this file today, but a `rustfmt`-style major
+# rewrite once a year is the realistic upper bound on toolchain drift.
+[toolchain]
+channel = "stable"
+components = ["clippy", "rustfmt"]
+profile = "minimal"
