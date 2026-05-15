@@ -47,7 +47,7 @@ parking_lot = "0.12"
 # that broke on minimalist macOS images and Windows curl variants whose
 # `-w` flag formatting differs, and which forked a process per port-probe
 # tick. `rustls-tls` (not `native-tls`) so no OpenSSL build dependency.
-ureq = { version = "2", default-features = false, features = ["rustls"] }
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 # `NamedTempFile` powers `atomic_write::write`'s tempfile creation —
 # uses the OS RNG for the suffix (where we previously hand-rolled it
 # with `rand::thread_rng`) and unlinks on Drop if persist isn't called,
