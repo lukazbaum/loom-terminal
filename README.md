@@ -60,6 +60,17 @@ and scrollback.
 
 Think of each pane as a thread. Loom weaves them.
 
+### Why not tmux?
+
+tmux doesn't capture coding-agent session ids, so quitting kills your
+`claude --resume` chain — Loom captures and replays them across restarts
+via per-agent Stop / SessionStart hooks it auto-installs (with consent).
+It also doesn't pulse a completion ping when an agent finishes a turn,
+render a live iframe of the dev server it just printed, or know that
+`codex` resumes via a subcommand while `gemini` uses `--resume`.
+tmux is still the better choice if your panes are mostly shells; Loom is
+the right choice if they're mostly agents.
+
 ## Features
 
 <table>
