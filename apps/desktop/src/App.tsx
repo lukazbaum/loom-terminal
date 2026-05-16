@@ -216,6 +216,33 @@ function App() {
     applyTheme(activeTheme);
   }, [activeTheme]);
 
+  // Block the WebView's default "navigate to dropped file" behavior.
+  // Without this, dragging a PNG / Markdown file into the window
+  // replaces the whole app with the WebKit viewer for that file and
+  // strands the user there. Tauri's `dragDropEnabled` is off in
+  // tauri.conf.json so HTML5 drag-drop events propagate inside the
+  // webview (the workspace-tab reorder relies on that) — the trade-
+  // off is that external file drops fall through to WebKit's
+  // default unless we explicitly preventDefault.
+  //
+  // We only block when the drag actually carries files. Internal
+  // drags (workspace tabs, etc.) advertise their own MIME type and
+  // never list "Files" in `dataTransfer.types`, so they pass through
+  // to their per-element handlers untouched.
+  useEffect(() => {
+    const blockFileDrop = (e: DragEvent) => {
+      if (e.dataTransfer && e.dataTransfer.types.includes("Files")) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("dragover", blockFileDrop, { capture: true });
+    window.addEventListener("drop", blockFileDrop, { capture: true });
+    return () => {
+      window.removeEventListener("dragover", blockFileDrop, { capture: true });
+      window.removeEventListener("drop", blockFileDrop, { capture: true });
+    };
+  }, []);
+
   // ── Layout history (undo / redo) ─────────────────────────────────
   // Snapshots of `workspaces` taken before each add/close pane op (and
   // launchWorkspace / closeWorkspace). Tracking only the workspaces
