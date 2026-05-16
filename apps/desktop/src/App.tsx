@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { detectAgent } from "./agents";
 import { AddShellsPrompt } from "./AddShellsPrompt";
+import { getPaneWriter, shellQuotePath } from "./paneWriters";
 import { AppHeader } from "./AppHeader";
 import { ConfirmCloseModal } from "./ConfirmCloseModal";
 import { shortenHome } from "./format";
@@ -216,30 +218,73 @@ function App() {
     applyTheme(activeTheme);
   }, [activeTheme]);
 
-  // Block the WebView's default "navigate to dropped file" behavior.
-  // Without this, dragging a PNG / Markdown file into the window
-  // replaces the whole app with the WebKit viewer for that file and
-  // strands the user there. Tauri's `dragDropEnabled` is off in
-  // tauri.conf.json so HTML5 drag-drop events propagate inside the
-  // webview (the workspace-tab reorder relies on that) — the trade-
-  // off is that external file drops fall through to WebKit's
-  // default unless we explicitly preventDefault.
+  // App-level drag-drop listener. Tauri's `dragDropEnabled: true`
+  // gives us the OS-level file path (WebKit strips it from
+  // `dataTransfer.files`), but `ev.payload.position` on macOS with
+  // our window config reports wrong y values, so we don't route by
+  // drop coordinate — we route to the currently-focused pane in the
+  // currently-active workspace. Click a pane, drop a file, path
+  // appears there.
   //
-  // We only block when the drag actually carries files. Internal
-  // drags (workspace tabs, etc.) advertise their own MIME type and
-  // never list "Files" in `dataTransfer.types`, so they pass through
-  // to their per-element handlers untouched.
+  // One listener at the App level (instead of one per TerminalView):
+  //   - No cross-workspace bug: with N per-pane listeners, every
+  //     workspace's focused pane fired and wrote the path; here we
+  //     dispatch to exactly one pane via the `paneWriters` registry.
+  //   - No StrictMode-race "Unhandled Promise Rejection" spam: with
+  //     a single listener, we only have one unlisten call to chase.
+  //
+  // Refs let the listener see the latest active workspace / active
+  // pane without re-subscribing on every state change.
+  const activePaneByWsRef = useRef(activePaneByWs);
+  activePaneByWsRef.current = activePaneByWs;
   useEffect(() => {
-    const blockFileDrop = (e: DragEvent) => {
-      if (e.dataTransfer?.types.includes("Files")) {
-        e.preventDefault();
-      }
-    };
-    window.addEventListener("dragover", blockFileDrop, { capture: true });
-    window.addEventListener("drop", blockFileDrop, { capture: true });
+    const win = getCurrentWindow();
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    win
+      .onDragDropEvent((ev) => {
+        if (cancelled) return;
+        if (ev.payload.type !== "drop") return;
+        const wsId = activeRef.current;
+        if (!wsId) return;
+        const paneId = activePaneByWsRef.current[wsId];
+        if (!paneId) return;
+        const write = getPaneWriter(paneId);
+        if (!write) return;
+        const paths = ev.payload.paths;
+        if (!paths || paths.length === 0) return;
+        write(paths.map(shellQuotePath).join(" ") + " ");
+      })
+      .then((u) => {
+        // Wrap u() so a StrictMode mount→unmount→mount race in dev
+        // doesn't surface as an "Unhandled Promise Rejection".
+        // Tauri 2's `_unlisten` throws when the eventId has been
+        // torn down already; we swallow that since the listener is
+        // gone either way.
+        const safeUnlisten = () => {
+          try {
+            const r = u() as unknown;
+            if (
+              r &&
+              typeof r === "object" &&
+              typeof (r as { then?: unknown }).then === "function"
+            ) {
+              (r as Promise<unknown>).catch(() => {});
+            }
+          } catch {
+            // Already unregistered.
+          }
+        };
+        if (cancelled) safeUnlisten();
+        else unlisten = safeUnlisten;
+      })
+      .catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn("[loom] failed to subscribe to drag-drop events", err);
+      });
     return () => {
-      window.removeEventListener("dragover", blockFileDrop, { capture: true });
-      window.removeEventListener("drop", blockFileDrop, { capture: true });
+      cancelled = true;
+      unlisten?.();
     };
   }, []);
 

@@ -1,11 +1,5 @@
-import {
-  memo,
-  useEffect,
-  useMemo,
-  useRef,
-  type DragEvent,
-  type MutableRefObject,
-} from "react";
+import { memo, useEffect, useMemo, useRef, type MutableRefObject } from "react";
+import { registerPaneWriter } from "./paneWriters";
 import type { IDisposable, Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { WebglAddon as WebglAddonType } from "@xterm/addon-webgl";
@@ -1018,57 +1012,23 @@ export const TerminalView = memo(function TerminalView({
     };
   }, []);
 
-  // Drag-and-drop file paths into the focused PTY. macOS Finder drags
-  // populate `dataTransfer` with a `text/uri-list` value (`file://...`
-  // URIs, newline-separated) — that's the only standards-track way to
-  // recover the OS-level path from inside a webview, since
-  // `dataTransfer.files` exposes File objects without absolute paths.
-  //
-  // Tauri's `dragDropEnabled` is off (workspace-tab reorder needs HTML5
-  // events to fire normally), so we can't fall back to the
-  // `webview.onDragDropEvent` path here. The window-level handler in
-  // `App.tsx` preventDefaults dragover/drop on file drops to stop the
-  // WebView's "open the file as a document" default — that
-  // preventDefault on dragover is also what makes the per-element
-  // `drop` below actually fire.
-  const onHostDrop = (e: DragEvent<HTMLDivElement>) => {
-    if (!e.dataTransfer.types.includes("Files")) return;
-    e.preventDefault();
-    const write = writeRef.current;
-    if (!write) return;
-    const uriList = e.dataTransfer.getData("text/uri-list");
-    if (!uriList) return;
-    const paths: string[] = [];
-    for (const line of uriList.split(/\r?\n/)) {
-      const trimmed = line.trim();
-      // text/uri-list spec: lines starting with `#` are comments.
-      if (!trimmed || trimmed.startsWith("#")) continue;
-      if (!trimmed.startsWith("file://")) continue;
-      try {
-        paths.push(decodeURIComponent(trimmed.slice("file://".length)));
-      } catch {
-        // Mal-encoded URI — skip rather than write garbage to the PTY.
-      }
-    }
-    if (paths.length === 0) return;
-    write(paths.map(shellQuotePath).join(" ") + " ");
-    termRef.current?.focus();
-  };
+  // Drag-and-drop file paths land in the workspace's focused pane.
+  // The single Tauri `onDragDropEvent` listener lives in App.tsx and
+  // routes via the `paneWriters` registry; we just register this
+  // pane's PTY-write fn here so the app-level handler can find it.
+  // Read-through `writeRef` so the registered closure always uses
+  // the latest writeData, even if the PTY is re-spawned.
+  useEffect(() => {
+    return registerPaneWriter(paneId, (text) => {
+      writeRef.current?.(text);
+      termRef.current?.focus();
+    });
+  }, [paneId]);
 
   return (
-    // biome-ignore lint/a11y/noStaticElementInteractions: xterm's host must be a plain div; the onDrop just routes Finder file paths into the PTY, not a separate AT-targetable surface
     <div
       className="term-host h-full w-full bg-ink-0 px-3 py-2.5"
       ref={hostRef}
-      onDrop={onHostDrop}
     />
   );
 });
-
-/// POSIX shell-quote: leave shell-safe characters bare, single-quote
-/// the rest with the standard `'\''` escape for embedded single
-/// quotes. Matches what macOS Terminal.app pastes when you drop a
-/// file onto it, so the user can hit Enter without further editing.
-function shellQuotePath(p: string): string {
-  return /^[A-Za-z0-9_./@:+-]+$/.test(p) ? p : `'${p.replace(/'/g, "'\\''")}'`;
-}
