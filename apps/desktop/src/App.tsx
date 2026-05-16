@@ -231,7 +231,7 @@ function App() {
   // to their per-element handlers untouched.
   useEffect(() => {
     const blockFileDrop = (e: DragEvent) => {
-      if (e.dataTransfer && e.dataTransfer.types.includes("Files")) {
+      if (e.dataTransfer?.types.includes("Files")) {
         e.preventDefault();
       }
     };

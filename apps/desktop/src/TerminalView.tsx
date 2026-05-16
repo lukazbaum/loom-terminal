@@ -1,9 +1,15 @@
-import { memo, useEffect, useMemo, useRef, type MutableRefObject } from "react";
+import {
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  type DragEvent,
+  type MutableRefObject,
+} from "react";
 import type { IDisposable, Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { WebglAddon as WebglAddonType } from "@xterm/addon-webgl";
 import { Channel, invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import "@xterm/xterm/css/xterm.css";
 import { reportInvokeError } from "./toast";
 import { useSetting } from "./settings";
@@ -1012,72 +1018,57 @@ export const TerminalView = memo(function TerminalView({
     };
   }, []);
 
-  // Drag-and-drop file paths into the PTY. Tauri delivers OS-level drag
-  // events window-wide with PHYSICAL coordinates; we route by checking
-  // this terminal host's bounding rect (after dividing by DPR, since
-  // getBoundingClientRect is in CSS pixels). A hidden host has a zero
-  // rect, so non-visible panes naturally don't match.
-  useEffect(() => {
-    const win = getCurrentWindow();
-    let unlisten: (() => void) | null = null;
-    let cancelled = false;
-
-    const isInside = (x: number, y: number) => {
-      const host = hostRef.current;
-      if (!host) return false;
-      const rect = host.getBoundingClientRect();
-      if (rect.width === 0 || rect.height === 0) return false;
-      const dpr = window.devicePixelRatio || 1;
-      const lx = x / dpr;
-      const ly = y / dpr;
-      return (
-        lx >= rect.left &&
-        lx <= rect.right &&
-        ly >= rect.top &&
-        ly <= rect.bottom
-      );
-    };
-
-    // POSIX shell-quote: leave safe chars alone, single-quote the rest
-    // (escaping embedded single quotes the standard `'\''` way). Matches
-    // what macOS Terminal.app pastes when you drop a file onto it.
-    const shellQuote = (p: string) =>
-      /^[A-Za-z0-9_./@:+-]+$/.test(p) ? p : `'${p.replace(/'/g, "'\\''")}'`;
-
-    win
-      .onDragDropEvent((ev) => {
-        // Listener can fire in the gap between listen() resolving and
-        // the cleanup running on unmount — drop the event if the
-        // component has already torn down.
-        if (cancelled) return;
-        if (ev.payload.type !== "drop") return;
-        if (!isInside(ev.payload.position.x, ev.payload.position.y)) return;
-        const write = writeRef.current;
-        if (!write) return;
-        const paths = ev.payload.paths;
-        if (!paths || paths.length === 0) return;
-        write(paths.map(shellQuote).join(" ") + " ");
-        termRef.current?.focus();
-      })
-      .then((u) => {
-        if (cancelled) u();
-        else unlisten = u;
-      })
-      .catch((err) => {
-        // eslint-disable-next-line no-console
-        console.warn("[loom] failed to subscribe to drag-drop events", err);
-      });
-
-    return () => {
-      cancelled = true;
-      unlisten?.();
-    };
-  }, []);
+  // Drag-and-drop file paths into the focused PTY. macOS Finder drags
+  // populate `dataTransfer` with a `text/uri-list` value (`file://...`
+  // URIs, newline-separated) — that's the only standards-track way to
+  // recover the OS-level path from inside a webview, since
+  // `dataTransfer.files` exposes File objects without absolute paths.
+  //
+  // Tauri's `dragDropEnabled` is off (workspace-tab reorder needs HTML5
+  // events to fire normally), so we can't fall back to the
+  // `webview.onDragDropEvent` path here. The window-level handler in
+  // `App.tsx` preventDefaults dragover/drop on file drops to stop the
+  // WebView's "open the file as a document" default — that
+  // preventDefault on dragover is also what makes the per-element
+  // `drop` below actually fire.
+  const onHostDrop = (e: DragEvent<HTMLDivElement>) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    e.preventDefault();
+    const write = writeRef.current;
+    if (!write) return;
+    const uriList = e.dataTransfer.getData("text/uri-list");
+    if (!uriList) return;
+    const paths: string[] = [];
+    for (const line of uriList.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      // text/uri-list spec: lines starting with `#` are comments.
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      if (!trimmed.startsWith("file://")) continue;
+      try {
+        paths.push(decodeURIComponent(trimmed.slice("file://".length)));
+      } catch {
+        // Mal-encoded URI — skip rather than write garbage to the PTY.
+      }
+    }
+    if (paths.length === 0) return;
+    write(paths.map(shellQuotePath).join(" ") + " ");
+    termRef.current?.focus();
+  };
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: xterm's host must be a plain div; the onDrop just routes Finder file paths into the PTY, not a separate AT-targetable surface
     <div
       className="term-host h-full w-full bg-ink-0 px-3 py-2.5"
       ref={hostRef}
+      onDrop={onHostDrop}
     />
   );
 });
+
+/// POSIX shell-quote: leave shell-safe characters bare, single-quote
+/// the rest with the standard `'\''` escape for embedded single
+/// quotes. Matches what macOS Terminal.app pastes when you drop a
+/// file onto it, so the user can hit Enter without further editing.
+function shellQuotePath(p: string): string {
+  return /^[A-Za-z0-9_./@:+-]+$/.test(p) ? p : `'${p.replace(/'/g, "'\\''")}'`;
+}
