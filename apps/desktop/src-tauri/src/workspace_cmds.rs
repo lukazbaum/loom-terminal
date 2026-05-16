@@ -418,7 +418,7 @@ pub fn claude_session_file_exists(cwd: String, session_id: String) -> bool {
 /// Path-building + size check separated from the `$HOME` lookup so it
 /// can be unit-tested against a tempdir. Claude encodes the project
 /// dir by replacing `/` with `-` (the leading slash becomes a leading
-/// dash), so `/Users/lukas` → `-Users-lukas`. The encoding doesn't
+/// dash), so `/home/user` → `-home-user`. The encoding doesn't
 /// escape any other character, which matches the layout under
 /// `~/.claude/projects/`.
 fn claude_session_file_has_content(
@@ -533,15 +533,15 @@ mod tests {
         // No filesystem access needed for the shape gate; an explicit
         // empty / oversized / metacharacter id is rejected up front.
         assert!(!claude_session_file_exists(
-            "/Users/lukas".into(),
+            "/home/user".into(),
             "".into()
         ));
         assert!(!claude_session_file_exists(
-            "/Users/lukas".into(),
+            "/home/user".into(),
             "abc;rm -rf $HOME".into()
         ));
         assert!(!claude_session_file_exists(
-            "/Users/lukas".into(),
+            "/home/user".into(),
             "a".repeat(200)
         ));
         assert!(!claude_session_file_exists(
@@ -555,13 +555,13 @@ mod tests {
         // Mirror Claude's projects/ layout in a tempdir, then check
         // that the resolver picks the right file for the given cwd.
         let root = tempfile::tempdir().unwrap();
-        let project_dir = root.path().join("-Users-lukas-Dev-loom");
+        let project_dir = root.path().join("-home-user-Dev-loom");
         std::fs::create_dir_all(&project_dir).unwrap();
         let id = "904cc7fb-513b-4faa-82db-50d7515f559b";
         std::fs::write(project_dir.join(format!("{id}.jsonl")), "{...}\n").unwrap();
         assert!(claude_session_file_has_content(
             root.path(),
-            "/Users/lukas/Dev/loom",
+            "/home/user/Dev/loom",
             id
         ));
         // Empty transcript: still rejected, since `claude --resume`
@@ -570,13 +570,13 @@ mod tests {
         std::fs::write(project_dir.join(format!("{empty_id}.jsonl")), "").unwrap();
         assert!(!claude_session_file_has_content(
             root.path(),
-            "/Users/lukas/Dev/loom",
+            "/home/user/Dev/loom",
             empty_id
         ));
         // Wrong cwd → wrong encoded dir → not found.
         assert!(!claude_session_file_has_content(
             root.path(),
-            "/Users/lukas/Dev/other",
+            "/home/user/Dev/other",
             id
         ));
     }
@@ -620,7 +620,7 @@ mod tests {
         assert!(!std::path::Path::new("--help").is_absolute());
         assert!(!std::path::Path::new("-o").is_absolute());
         assert!(!std::path::Path::new("relative/path").is_absolute());
-        assert!(std::path::Path::new("/Users/lukas/repo").is_absolute());
+        assert!(std::path::Path::new("/home/user/repo").is_absolute());
     }
 
     /// Lock-order regression. The pty.rs module header documents an

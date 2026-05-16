@@ -661,8 +661,8 @@ mod nested_tests {
     #[test]
     fn shell_quote_leaves_simple_paths_alone() {
         assert_eq!(
-            shell_quote("/Users/lukas/.claude/loom-stop-hook.sh"),
-            "/Users/lukas/.claude/loom-stop-hook.sh"
+            shell_quote("/home/user/.claude/loom-stop-hook.sh"),
+            "/home/user/.claude/loom-stop-hook.sh"
         );
     }
 

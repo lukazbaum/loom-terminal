@@ -72,7 +72,7 @@ describe("parsePersistedPane", () => {
       id: "pane_1",
       kind: "terminal",
       command: "claude",
-      cwd: "/Users/lukas/repo",
+      cwd: "/home/user/repo",
       env: { NODE_ENV: "test" },
       previewUrl: "http://localhost:3000",
       sessionId: "abc-123",
@@ -82,7 +82,7 @@ describe("parsePersistedPane", () => {
       id: "pane_1",
       kind: "terminal",
       command: "claude",
-      cwd: "/Users/lukas/repo",
+      cwd: "/home/user/repo",
       env: { NODE_ENV: "test" },
       previewUrl: "http://localhost:3000",
       sessionId: "abc-123",
@@ -382,7 +382,7 @@ describe("loadSession", () => {
         {
           id: "ws_a",
           name: "Loom",
-          path: "/Users/lukas/Dev/loom",
+          path: "/home/user/Dev/loom",
           panes: [
             {
               id: "p1",
