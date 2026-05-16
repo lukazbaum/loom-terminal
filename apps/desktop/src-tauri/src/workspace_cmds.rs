@@ -532,10 +532,7 @@ mod tests {
     fn claude_session_file_exists_rejects_bad_session_id_shapes() {
         // No filesystem access needed for the shape gate; an explicit
         // empty / oversized / metacharacter id is rejected up front.
-        assert!(!claude_session_file_exists(
-            "/home/user".into(),
-            "".into()
-        ));
+        assert!(!claude_session_file_exists("/home/user".into(), "".into()));
         assert!(!claude_session_file_exists(
             "/home/user".into(),
             "abc;rm -rf $HOME".into()
