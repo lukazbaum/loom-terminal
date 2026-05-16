@@ -12,6 +12,16 @@ move the whole section under a new version heading.
 
 ## [Unreleased]
 
+## [0.1.1-alpha] - 2026-05-16
+
+### Fixed
+- Drag-and-drop files from Finder (or any external source) now lands
+  in the focused pane of the active workspace via `text/uri-list`,
+  instead of being swallowed by the WebView's default handler.
+- Claude session resume no longer breaks when the Stop / SessionStart
+  hooks run with no TTY attached; bad / malformed session ids are
+  rejected up-front instead of being persisted.
+
 ## [0.1.0-alpha] - 2026-05-15
 
 First tagged release. Loom is a Tauri 2 + React 19 desktop app for
@@ -60,5 +70,6 @@ the roadmap.
   isSessionAgent).
 - All running via `bun run check`. CI gates merges on the same.
 
-[Unreleased]: https://github.com/lukazbaum/loom-terminal/compare/v0.1.0-alpha...HEAD
+[Unreleased]: https://github.com/lukazbaum/loom-terminal/compare/v0.1.1-alpha...HEAD
+[0.1.1-alpha]: https://github.com/lukazbaum/loom-terminal/compare/v0.1.0-alpha...v0.1.1-alpha
 [0.1.0-alpha]: https://github.com/lukazbaum/loom-terminal/releases/tag/v0.1.0-alpha

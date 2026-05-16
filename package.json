@@ -1,7 +1,7 @@
 {
   "name": "loom",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Parallel coding-agent shells, woven into one window. A Tauri 2 desktop app for orchestrating Claude, Codex, OpenCode, Gemini, Grok, and any other terminal command side-by-side in one workspace.",
   "license": "MIT",
   "author": "Lukas Baum <lukas@lukasbaum.dev>",
