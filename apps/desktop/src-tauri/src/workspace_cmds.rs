@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::{AppState, PaneSession, Workspace};
 
@@ -311,27 +311,275 @@ pub fn paths_exist(paths: Vec<String>) -> Vec<bool> {
 }
 
 /// Returns a `pane_id -> claude_session_id` map of every currently-running
-/// pane that has captured a Claude session id from a Stop hook. Used by
-/// the frontend's session-persist layer to enrich the saved snapshot so
-/// the next launch can spawn each claude pane with `--resume <id>`.
+/// pane that has captured a Claude session id. Used by the frontend's
+/// session-persist layer to enrich the saved snapshot so the next launch
+/// can spawn each claude pane with `--resume <id>`.
+///
+/// Two transports in priority order:
+///   1. In-memory `last_claude_session_id`, populated by the OSC scanner
+///      when the hook's `loom-session` marker reaches our PTY. Fast,
+///      synchronous with the turn ending.
+///   2. Sidecar file at `~/.loom/sessions/<pane_id>`, written by the
+///      hook script via `$LOOM_PANE_ID`. Required on agent builds that
+///      capture hook stdout/stderr AND detach the hook from the TTY
+///      (Claude 2.1.142+) — no other path reaches us.
+///
+/// Sidecar wins when both are present: the file is overwritten on every
+/// SessionStart/Stop, so it's the freshest signal if the OSC path also
+/// happened to land.
+///
+/// Side-effect: when a sidecar id differs from what the in-memory
+/// `last_claude_session_id` was the last time we polled, we update the
+/// in-memory field AND fire a `loom-session-captured` event so the
+/// frontend's React handler runs (dispatch → state update → debounced
+/// shape save). Without this, the polled return value here would
+/// surface in the frontend's *next* save only if some unrelated
+/// workspaces-state change kicked the debounce — i.e. a pane resumed
+/// to a new id and the user just sat reading without clicking would
+/// never have the new id flushed to localStorage.
 #[tauri::command]
-pub fn get_pane_session_ids(state: State<'_, AppState>) -> HashMap<String, String> {
+pub fn get_pane_session_ids(app: AppHandle, state: State<'_, AppState>) -> HashMap<String, String> {
     let p2s = state.pane_to_session.lock();
     let sessions = state.sessions.lock();
     let mut out = HashMap::new();
+    let sidecar_root = sidecar_sessions_dir();
     for (pane_id, session_id) in p2s.iter() {
-        if let Some(s) = sessions.get(session_id) {
-            if let Some(sid) = s.signals.lock().last_claude_session_id.clone() {
-                out.insert(pane_id.clone(), sid);
+        let from_sidecar = sidecar_root
+            .as_ref()
+            .and_then(|root| read_pane_sidecar(root, pane_id));
+        let from_memory = sessions
+            .get(session_id)
+            .and_then(|s| s.signals.lock().last_claude_session_id.clone());
+
+        // If the sidecar carries a new id (one we haven't seen
+        // in-memory yet), promote it: update the in-memory slot and
+        // emit the event so the React handler can dispatch the
+        // state patch + sync-persist the override. The dispatch
+        // path's own equality check stops a re-emit loop once state
+        // catches up.
+        if let Some(fresh) = from_sidecar.as_deref() {
+            let changed = match &from_memory {
+                Some(prev) => prev != fresh,
+                None => true,
+            };
+            if changed {
+                if let Some(s) = sessions.get(session_id) {
+                    s.signals.lock().last_claude_session_id = Some(fresh.to_string());
+                }
+                let _ = app.emit(
+                    "loom-session-captured",
+                    serde_json::json!({
+                        "pane_id": pane_id,
+                        "session_id": fresh,
+                    }),
+                );
             }
+        }
+
+        if let Some(sid) = from_sidecar.or(from_memory) {
+            out.insert(pane_id.clone(), sid);
         }
     }
     out
 }
 
+/// `~/.loom/sessions/` — the directory hook scripts write captured
+/// session ids into. Returns None when $HOME isn't set (shouldn't
+/// happen in practice, but we'd rather skip the read than panic).
+fn sidecar_sessions_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".loom").join("sessions"))
+}
+
+/// Whether `~/.claude/projects/<encoded-cwd>/<session_id>.jsonl` exists
+/// and has at least one line of content. Frontend calls this before
+/// splicing `claude --resume <id>` so a captured-but-never-written
+/// session id (SessionStart fired on a fresh `claude` invocation, user
+/// quit before the first turn was committed to disk) doesn't get
+/// retried forever — the resume would error with "No conversation
+/// found with session ID: ..." and dump the user at a shell.
+///
+/// Returns `false` on any IO or argument-shape problem; treating
+/// "uncertain" as "missing" is safer than spuriously splicing a
+/// `--resume` flag.
+#[tauri::command]
+pub fn claude_session_file_exists(cwd: String, session_id: String) -> bool {
+    if !is_valid_session_id(&session_id) || cwd.is_empty() {
+        return false;
+    }
+    let Some(home) = std::env::var_os("HOME") else {
+        return false;
+    };
+    let projects_root = std::path::PathBuf::from(home)
+        .join(".claude")
+        .join("projects");
+    claude_session_file_has_content(&projects_root, &cwd, &session_id)
+}
+
+/// Path-building + size check separated from the `$HOME` lookup so it
+/// can be unit-tested against a tempdir. Claude encodes the project
+/// dir by replacing `/` with `-` (the leading slash becomes a leading
+/// dash), so `/Users/lukas` → `-Users-lukas`. The encoding doesn't
+/// escape any other character, which matches the layout under
+/// `~/.claude/projects/`.
+fn claude_session_file_has_content(
+    projects_root: &std::path::Path,
+    cwd: &str,
+    session_id: &str,
+) -> bool {
+    let encoded = cwd.replace('/', "-");
+    let path = projects_root
+        .join(encoded)
+        .join(format!("{session_id}.jsonl"));
+    match std::fs::metadata(&path) {
+        Ok(m) => m.is_file() && m.len() > 0,
+        Err(_) => false,
+    }
+}
+
+/// Shape gate for session ids we'll splice into the PTY-typed resume
+/// command. Cap stops a malicious OSC marker (or stray sidecar file)
+/// from constructing a long shell expression; character class blocks
+/// shell metacharacters since the spliced command is typed straight
+/// into the user's shell.
+fn is_valid_session_id(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 128
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Read and validate a sidecar file at `<root>/<pane_id>`. Returns the
+/// trimmed session id when it parses as a single line passing
+/// `is_valid_session_id`; otherwise None. The shape gate is
+/// defense-in-depth — the hook only writes Claude/Codex/Gemini session
+/// ids, but the file lives in the user's $HOME and could be touched
+/// by anything.
+fn read_pane_sidecar(root: &std::path::Path, pane_id: &str) -> Option<String> {
+    // Reject any pane_id that could escape the sidecar directory. Loom
+    // pane ids are `p_<base36>_<base36>` so this is paranoia, not a
+    // known vector — but the path is composed into a filesystem read.
+    if pane_id.is_empty() || pane_id.contains('/') || pane_id.contains('\\') || pane_id == ".." {
+        return None;
+    }
+    let raw = std::fs::read_to_string(root.join(pane_id)).ok()?;
+    let trimmed = raw.trim();
+    if is_valid_session_id(trimmed) {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sidecar_reader_accepts_well_formed_session_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let pane_id = "p_abc123_def456";
+        std::fs::write(
+            dir.path().join(pane_id),
+            "77e64e20-1234-5678-9abc-def012345678\n",
+        )
+        .unwrap();
+        assert_eq!(
+            read_pane_sidecar(dir.path(), pane_id),
+            Some("77e64e20-1234-5678-9abc-def012345678".to_string())
+        );
+    }
+
+    #[test]
+    fn sidecar_reader_rejects_shell_metacharacters() {
+        // The session id is spliced into a shell-spawned `claude --resume`
+        // command on restore (frontend `resumeAwareCommand`). A file
+        // containing shell metachars must NOT round-trip through this
+        // reader even though `resumeAwareCommand` has its own gate.
+        let dir = tempfile::tempdir().unwrap();
+        let pane_id = "p_x";
+        std::fs::write(dir.path().join(pane_id), "abc;rm -rf $HOME").unwrap();
+        assert_eq!(read_pane_sidecar(dir.path(), pane_id), None);
+    }
+
+    #[test]
+    fn sidecar_reader_rejects_empty_or_oversized() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("empty"), "   \n").unwrap();
+        assert_eq!(read_pane_sidecar(dir.path(), "empty"), None);
+        std::fs::write(dir.path().join("huge"), "a".repeat(200)).unwrap();
+        assert_eq!(read_pane_sidecar(dir.path(), "huge"), None);
+    }
+
+    #[test]
+    fn sidecar_reader_rejects_path_traversal_in_pane_id() {
+        let dir = tempfile::tempdir().unwrap();
+        // A real attempt to escape the directory wouldn't ever land on
+        // disk via our hook (we always write `<root>/<pane_id>` from
+        // a Loom-generated `pane_id`), but the reader is a defensive
+        // gate in case anything else populates the dir.
+        assert_eq!(read_pane_sidecar(dir.path(), "../etc/passwd"), None);
+        assert_eq!(read_pane_sidecar(dir.path(), ".."), None);
+        assert_eq!(read_pane_sidecar(dir.path(), ""), None);
+    }
+
+    #[test]
+    fn sidecar_reader_returns_none_when_file_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(read_pane_sidecar(dir.path(), "p_nonexistent"), None);
+    }
+
+    #[test]
+    fn claude_session_file_exists_rejects_bad_session_id_shapes() {
+        // No filesystem access needed for the shape gate; an explicit
+        // empty / oversized / metacharacter id is rejected up front.
+        assert!(!claude_session_file_exists(
+            "/Users/lukas".into(),
+            "".into()
+        ));
+        assert!(!claude_session_file_exists(
+            "/Users/lukas".into(),
+            "abc;rm -rf $HOME".into()
+        ));
+        assert!(!claude_session_file_exists(
+            "/Users/lukas".into(),
+            "a".repeat(200)
+        ));
+        assert!(!claude_session_file_exists(
+            "".into(),
+            "904cc7fb-513b-4faa-82db-50d7515f559b".into()
+        ));
+    }
+
+    #[test]
+    fn claude_session_file_lookup_round_trip() {
+        // Mirror Claude's projects/ layout in a tempdir, then check
+        // that the resolver picks the right file for the given cwd.
+        let root = tempfile::tempdir().unwrap();
+        let project_dir = root.path().join("-Users-lukas-Dev-loom");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let id = "904cc7fb-513b-4faa-82db-50d7515f559b";
+        std::fs::write(project_dir.join(format!("{id}.jsonl")), "{...}\n").unwrap();
+        assert!(claude_session_file_has_content(
+            root.path(),
+            "/Users/lukas/Dev/loom",
+            id
+        ));
+        // Empty transcript: still rejected, since `claude --resume`
+        // against an empty file just dumps you back at a shell.
+        let empty_id = "11111111-2222-3333-4444-555555555555";
+        std::fs::write(project_dir.join(format!("{empty_id}.jsonl")), "").unwrap();
+        assert!(!claude_session_file_has_content(
+            root.path(),
+            "/Users/lukas/Dev/loom",
+            empty_id
+        ));
+        // Wrong cwd → wrong encoded dir → not found.
+        assert!(!claude_session_file_has_content(
+            root.path(),
+            "/Users/lukas/Dev/other",
+            id
+        ));
+    }
 
     #[test]
     fn parse_branch_header_handles_normal_branch() {

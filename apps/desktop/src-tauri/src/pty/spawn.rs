@@ -135,6 +135,7 @@ pub struct PaneSnapshot {
 /// caller-supplied overrides applied last so they win.
 pub(crate) fn build_pane_command(
     cwd: &str,
+    pane_id: &str,
     env: Option<&HashMap<String, String>>,
 ) -> Result<CommandBuilder, String> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
@@ -152,6 +153,14 @@ pub(crate) fn build_pane_command(
     if let Ok(p) = std::env::var("PATH") {
         cmd.env("PATH", p);
     }
+    // Expose the pane id so descendant processes — specifically the
+    // agent's Stop/SessionStart hooks — can drop the captured session
+    // id into a per-pane sidecar at `~/.loom/sessions/<pane_id>`. The
+    // OSC-9 marker path through the PTY is unreliable when newer agent
+    // builds (e.g. Claude 2.1.142+) detach hooks from the controlling
+    // terminal AND capture stdout/stderr — the sidecar file is the
+    // only TTY-independent transport we have. See `loom-stop-hook.sh`.
+    cmd.env("LOOM_PANE_ID", pane_id);
     if let Some(env_map) = env {
         crate::validate_env_map(env_map)?;
         for (k, v) in env_map {
@@ -189,7 +198,7 @@ pub fn spawn_terminal(
         .map_err(|e| format!("openpty failed: {e}"))?;
 
     let effective_cwd = cwd.as_deref().unwrap_or(&path);
-    let cmd = build_pane_command(effective_cwd, env.as_ref())?;
+    let cmd = build_pane_command(effective_cwd, &pane_id, env.as_ref())?;
 
     let child = ChildGuard::new(
         pair.slave

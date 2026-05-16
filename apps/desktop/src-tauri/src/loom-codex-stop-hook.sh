@@ -50,7 +50,37 @@ def emit_osc(s):
     except Exception:
         pass
 
-if session_id:
+# Same has_transcript_content guard as the Claude hook: avoid capturing
+# an id on SessionStart of a fresh session where the transcript hasn't
+# been written yet — `codex resume <bogus>` would error on the next
+# launch.
+def has_transcript_content(path):
+    if not path:
+        return False
+    try:
+        return os.path.isfile(path) and os.path.getsize(path) > 0
+    except Exception:
+        return False
+
+transcript = hook_input.get("transcript_path")
+if session_id and (event == "Stop" or has_transcript_content(transcript)):
+    # Per-pane sidecar at ~/.loom/sessions/<pane_id> that the Loom
+    # backend reads. Survives hosts that capture hook stdout/stderr or
+    # detach the hook from the controlling TTY (which is how every byte
+    # from `emit_osc` below silently disappears).
+    pane_id = os.environ.get("LOOM_PANE_ID")
+    if pane_id:
+        try:
+            home = os.path.expanduser("~")
+            sidecar_dir = os.path.join(home, ".loom", "sessions")
+            os.makedirs(sidecar_dir, exist_ok=True)
+            sidecar_path = os.path.join(sidecar_dir, pane_id)
+            tmp_path = sidecar_path + ".tmp"
+            with open(tmp_path, "w") as f:
+                f.write(str(session_id) + "\n")
+            os.replace(tmp_path, sidecar_path)
+        except Exception:
+            pass
     emit_osc("\x1b]9;loom-session;" + str(session_id) + "\x1b\\")
 
 # SessionStart: session marker only, no stop.

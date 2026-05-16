@@ -271,7 +271,12 @@ function App() {
         const pane = w.panes.find((p) => p.id === pane_id);
         if (!pane) continue;
         const detected = detectAgent(pane.command ?? "");
-        if (isSessionAgent(detected)) agentForOverride = detected;
+        // Default to "claude" when detection returns shell/custom —
+        // e.g. a blank pane the user typed `claude` into manually.
+        // Guessing wrong is safe: `sanitizePaneAgent` at load time
+        // drops the id if the pane's command doesn't still match the
+        // agent. Losing the id is worse than guessing.
+        agentForOverride = isSessionAgent(detected) ? detected : "claude";
         break;
       }
       if (agentForOverride !== null) {

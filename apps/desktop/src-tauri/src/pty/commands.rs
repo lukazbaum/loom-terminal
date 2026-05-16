@@ -178,7 +178,7 @@ pub(crate) fn restart_pane_session(
     let pair = pty_system
         .openpty(size)
         .map_err(|e| format!("openpty: {e}"))?;
-    let cmd_builder = build_pane_command(&workspace_path, None)?;
+    let cmd_builder = build_pane_command(&workspace_path, pane_id, None)?;
 
     let new_child = ChildGuard::new(
         pair.slave

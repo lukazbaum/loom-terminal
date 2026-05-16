@@ -819,11 +819,36 @@ export const TerminalView = memo(function TerminalView({
         const cols = term.cols;
         const rows = term.rows;
 
+        // Verify a captured Claude session id still points at a real
+        // transcript before splicing `--resume <id>`. A SessionStart hook
+        // can fire on a fresh `claude` invocation before the user has
+        // committed any turn to disk — if they quit at that point, the
+        // id we captured has no `.jsonl` behind it, and the next launch
+        // would `claude --resume <bogus>` straight into a "No conversation
+        // found" error. Fall back to the bare command so the pane is
+        // usable. Codex / Gemini have their own storage layouts; for
+        // safety we keep the splice for them and revisit if their
+        // equivalent failure surfaces.
+        let startupCommand = effectiveCommand;
+        if (sessionId && sessionAgent === "claude" && effectiveCommand) {
+          try {
+            const exists = await invoke<boolean>("claude_session_file_exists", {
+              cwd: cwd ?? path,
+              sessionId,
+            });
+            if (!exists) {
+              startupCommand = command;
+            }
+          } catch (e) {
+            logIpcError("claude_session_file_exists", e);
+          }
+        }
+
         const newId = await invoke<string>("spawn_terminal", {
           paneId,
           workspaceId,
           path,
-          command: effectiveCommand ?? null,
+          command: startupCommand ?? null,
           cwd: cwd ?? null,
           env: env ?? null,
           cols,
@@ -849,7 +874,7 @@ export const TerminalView = memo(function TerminalView({
         };
         writeRef.current = writeData;
 
-        const startup = effectiveCommand?.trim();
+        const startup = startupCommand?.trim();
         if (startup) {
           writeData(`${startup}\n`);
         }

@@ -353,6 +353,7 @@ pub fn run() {
             port_cmds::dismiss_workspace_port,
             attach::read_file_for_attach,
             workspace_cmds::get_pane_session_ids,
+            workspace_cmds::claude_session_file_exists,
             workspace_cmds::paths_exist,
             workspace_cmds::register_workspace,
             workspace_cmds::unregister_workspace,
