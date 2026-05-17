@@ -1,31 +1,44 @@
 import {
-  useEffect,
   type Dispatch,
   type MutableRefObject,
   type SetStateAction,
+  useEffect,
+  useMemo,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
+import {
+  ACTION_IDS,
+  type ActionId,
+  type Chord,
+  type Keymap,
+  isDispatchLocked,
+  matchesChord,
+  parseChord,
+} from "./keybindings";
+import { isMac } from "./platform";
 import { reportInvokeError } from "./toast";
 import type { Session } from "./types";
 
 type View = { kind: "workspace"; id: string } | { kind: "new" };
 
 type Args = {
-  /// Refs feeding the capture-phase handler. Read via `.current` so
-  /// the listener doesn't re-bind on every workspace mutation — without
-  /// this, fast typing during a busy render queue could miss a Cmd+1.
+  /// Refs feeding the listener. Read via `.current` so the handler
+  /// always sees fresh state without forcing a re-bind on every
+  /// workspace mutation.
   activeWorkspaceIdRef: MutableRefObject<string | null>;
   workspacesRef: MutableRefObject<Session[]>;
 
-  /// Live state read by the bubble-phase handler. Listed in the effect's
-  /// dep list so a workspace add/remove or pane-active change re-binds
-  /// (cheap — one listener swap, no React commit).
+  /// Live state that's read directly (not via ref). Listed in the
+  /// effect's dep list so a workspace add/remove or pane-active change
+  /// re-binds — those events happen rarely compared to the keystroke
+  /// rate that drove the ref pattern in the first place.
   workspaces: Session[];
   activePaneByWs: Record<string, string>;
+  keymap: Keymap;
   restartShortcutEnabled: boolean;
 
-  // ── Mutators / dispatchers ───────────────────────────────────────
+  // ── Mutators / dispatchers ─────────────────────────────────────────
   setActivePaneByWs: Dispatch<SetStateAction<Record<string, string>>>;
   setShowShortcutHelp: Dispatch<SetStateAction<boolean>>;
   setActiveView: (next: View) => void;
@@ -33,7 +46,7 @@ type Args = {
   setRoute: Dispatch<SetStateAction<"settings" | "themeEditor" | null>>;
   toggleCollapsed: () => void;
 
-  // ── Workspace / pane actions ────────────────────────────────────
+  // ── Workspace / pane actions ──────────────────────────────────────
   moveWorkspace: (from: number, to: number) => void;
   activateWorkspace: (id: string) => void;
   addPane: (workspaceId: string) => void;
@@ -45,29 +58,23 @@ type Args = {
 
 /// All top-level keyboard shortcuts, lifted out of App.tsx.
 ///
-/// Split into two listeners by phase:
+/// One capture-phase listener handles everything. Capture phase runs
+/// before xterm.js sees the event, which matters on Windows/Linux where
+/// `Ctrl+letter` would otherwise be consumed by the terminal as a
+/// control character (Ctrl+N → ^N). When we don't claim the event, we
+/// let it propagate so the terminal still receives ordinary input.
 ///
-/// 1. **Capture phase** (runs BEFORE xterm.js sees the event) catches
-///    chords the terminal would otherwise swallow — bare `?` and
-///    `Alt+1..9` emit characters into xterm, so we stop them at the
-///    document boundary. Also handles `⌥↑` / `⌥↓` for workspace
-///    reorder.
-/// 2. **Bubble phase** handles every other `⌘`-modified shortcut.
-///    xterm.js leaves `⌘` chords alone, so terminals don't swallow
-///    these.
-///
-/// Hot loops never read closure state for things that can change
-/// mid-render: `activeWorkspaceIdRef` and `workspacesRef` are threaded
-/// in so we don't have to re-bind the listener on every workspace
-/// mutation. The bubble-phase handler's deps DO list its live state
-/// because re-binding on workspace add/remove is desirable: those
-/// happen rarely (compared to the per-chunk reader-thread events that
-/// drove the ref-pattern here in the first place).
+/// Action dispatch is data-driven: iterate over `keymap`, match each
+/// chord against the event, fire the first handler that hits. The two
+/// digit-range patterns (Mod+1..9, Alt+1..9) stay hardcoded because
+/// they're patterns rather than individual bindings; both still go
+/// through the same OS-aware modifier check as customizable chords.
 export function useAppShortcuts({
   activeWorkspaceIdRef,
   workspacesRef,
   workspaces,
   activePaneByWs,
+  keymap,
   restartShortcutEnabled,
   setActivePaneByWs,
   setShowShortcutHelp,
@@ -83,33 +90,203 @@ export function useAppShortcuts({
   undoLayout,
   redoLayout,
 }: Args): void {
-  // Capture-phase listener for shortcuts that the terminal would
-  // otherwise intercept (bare `?` and Alt+digit emit characters into
-  // xterm). Runs BEFORE xterm's own handler and stops propagation
-  // when we claim the event, so we don't end up sending stray "¡" / "?"
-  // into the shell.
+  /// Parse the keymap once per change. Parsing on every keystroke would
+  /// re-run a few hundred regex+split operations per chord; this caches
+  /// the parsed form so the hot path is just a memo lookup + comparison.
+  const parsedKeymap = useMemo(() => {
+    const out = {} as Record<ActionId, Chord[]>;
+    for (const id of ACTION_IDS) {
+      out[id] = keymap[id]
+        .map(parseChord)
+        .filter((c): c is Chord => c !== null);
+    }
+    return out;
+  }, [keymap]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: handler closes over many in-scope helpers (activateWorkspace, closePane, ...) that themselves capture state listed in the dep array; refactoring to a ref bag would be honest but is deferred
   useEffect(() => {
-    const onCaptureKey = (e: KeyboardEvent) => {
+    const handlers: Record<ActionId, () => boolean> = {
+      "workspace.new": () => {
+        setActiveView({ kind: "new" });
+        return true;
+      },
+      "workspace.close": () => {
+        if (!activeWorkspaceIdRef.current) return false;
+        setCloseTargetId(activeWorkspaceIdRef.current);
+        return true;
+      },
+      "workspace.next": () => {
+        if (workspaces.length < 2) return false;
+        const cur = activeWorkspaceIdRef.current;
+        if (!cur) return false;
+        const idx = workspaces.findIndex((w) => w.id === cur);
+        const target =
+          idx >= 0 ? workspaces[(idx + 1) % workspaces.length] : undefined;
+        if (!target) return false;
+        activateWorkspace(target.id);
+        return true;
+      },
+      "workspace.prev": () => {
+        if (workspaces.length < 2) return false;
+        const cur = activeWorkspaceIdRef.current;
+        if (!cur) return false;
+        const idx = workspaces.findIndex((w) => w.id === cur);
+        const target =
+          idx >= 0
+            ? workspaces[(idx - 1 + workspaces.length) % workspaces.length]
+            : undefined;
+        if (!target) return false;
+        activateWorkspace(target.id);
+        return true;
+      },
+      "workspace.moveUp": () => {
+        const cur = activeWorkspaceIdRef.current;
+        if (!cur) return false;
+        const list = workspacesRef.current;
+        const idx = list.findIndex((w) => w.id === cur);
+        if (idx <= 0) return false;
+        moveWorkspace(idx, idx - 1);
+        return true;
+      },
+      "workspace.moveDown": () => {
+        const cur = activeWorkspaceIdRef.current;
+        if (!cur) return false;
+        const list = workspacesRef.current;
+        const idx = list.findIndex((w) => w.id === cur);
+        if (idx < 0 || idx >= list.length - 1) return false;
+        // moveWorkspace's `to` is the destination index in the pre-removal
+        // array (see its `adjusted = from < to ? to - 1 : to` math): the
+        // down-one target is `idx + 2`.
+        moveWorkspace(idx, idx + 2);
+        return true;
+      },
+      "pane.new": () => {
+        const wsId = activeWorkspaceIdRef.current;
+        if (!wsId) return false;
+        addPane(wsId);
+        return true;
+      },
+      "pane.splitHorizontal": () => {
+        const wsId = activeWorkspaceIdRef.current;
+        if (!wsId) return false;
+        // The current layout is a uniform grid — both split actions just
+        // append a pane. True directional splits would need a tree layout.
+        addPane(wsId);
+        return true;
+      },
+      "pane.splitVertical": () => {
+        const wsId = activeWorkspaceIdRef.current;
+        if (!wsId) return false;
+        addPane(wsId);
+        return true;
+      },
+      "pane.close": () => {
+        const wsId = activeWorkspaceIdRef.current;
+        if (!wsId) return false;
+        const activeId = activePaneByWs[wsId];
+        if (!activeId) return false;
+        closePane(wsId, activeId);
+        return true;
+      },
+      "pane.next": () => {
+        const wsId = activeWorkspaceIdRef.current;
+        if (!wsId) return false;
+        cyclePane(wsId, 1);
+        return true;
+      },
+      "pane.prev": () => {
+        const wsId = activeWorkspaceIdRef.current;
+        if (!wsId) return false;
+        cyclePane(wsId, -1);
+        return true;
+      },
+      "pane.restart": () => {
+        if (!restartShortcutEnabled) return false;
+        const wsId = activeWorkspaceIdRef.current;
+        if (!wsId) return false;
+        const activeId = activePaneByWs[wsId];
+        if (!activeId) return false;
+        invoke("restart_pane", { paneId: activeId }).catch((err) =>
+          reportInvokeError("restart_pane", err),
+        );
+        return true;
+      },
+      "layout.undo": () => {
+        undoLayout();
+        return true;
+      },
+      "layout.redo": () => {
+        redoLayout();
+        return true;
+      },
+      "view.toggleSidebar": () => {
+        toggleCollapsed();
+        return true;
+      },
+      "view.settings": () => {
+        setRoute((prev) => (prev === "settings" ? null : "settings"));
+        return true;
+      },
+      "view.help": () => {
+        setShowShortcutHelp((prev) => !prev);
+        return true;
+      },
+    };
+
+    const onKey = (e: KeyboardEvent) => {
+      // A focused chord recorder (Settings page) pauses dispatch while
+      // capturing the user's next keystroke.
+      if (isDispatchLocked()) return;
+
       const target = e.target as HTMLElement | null;
       const inField =
-        target &&
+        target !== null &&
         (target.tagName === "INPUT" ||
           target.tagName === "TEXTAREA" ||
           target.isContentEditable);
 
-      // `?` opens/closes the keyboard help overlay. Skip when typing.
-      if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key === "?" && !inField) {
-        e.preventDefault();
-        e.stopPropagation();
-        setShowShortcutHelp((prev) => !prev);
-        return;
+      // ── Customizable actions ────────────────────────────────────────
+      for (const id of ACTION_IDS) {
+        const chords = parsedKeymap[id];
+        for (const chord of chords) {
+          if (!matchesChord(e, chord)) continue;
+          // Chords without a primary modifier (Mod/Ctrl) are skipped
+          // inside text fields so the user can still type — otherwise
+          // a `?` shortcut would steal the question-mark keystroke.
+          if (inField && !chord.mod && !chord.ctrl) return;
+          if (handlers[id]()) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+          return;
+        }
       }
 
-      // Alt+1..9 — focus pane by index in active workspace.
-      // e.code dodges the Option-key symbol mapping on macOS
-      // (Option+1 = ¡), letting us claim by physical key position
-      // regardless of layout.
-      if (e.altKey && !e.metaKey && !e.ctrlKey) {
+      // ── Static digit ranges (not customizable) ──────────────────────
+      // Mod+Digit1..9 → switch workspace. Mod is ⌘ on macOS, Ctrl on
+      // Windows/Linux. Win-key on Win/Linux is ignored.
+      const modOnly = isMac
+        ? e.metaKey && !e.altKey && !e.ctrlKey
+        : e.ctrlKey && !e.altKey && !e.metaKey;
+      if (modOnly && !e.shiftKey) {
+        const m = /^Digit([1-9])$/.exec(e.code);
+        const digit = m?.[1];
+        if (digit) {
+          const idx = parseInt(digit, 10) - 1;
+          const target = workspacesRef.current[idx];
+          if (target) {
+            e.preventDefault();
+            e.stopPropagation();
+            activateWorkspace(target.id);
+          }
+          return;
+        }
+      }
+
+      // Alt+Digit1..9 → focus pane by index in the active workspace.
+      // `e.code` dodges the Option-key symbol mapping on macOS
+      // (Option+1 = ¡), letting us claim by physical key position.
+      if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
         const m = /^Digit([1-9])$/.exec(e.code);
         const digit = m?.[1];
         if (digit) {
@@ -127,186 +304,18 @@ export function useAppShortcuts({
           );
           return;
         }
-
-        // ⌥↑ / ⌥↓ — reorder the active workspace up / down in the
-        // sidebar. Closes the keyboard gap surfaced by the a11y pass
-        // (workspace tabs were previously reorder-via-drag-only).
-        // `inField` guard so the same chord doesn't get hijacked while
-        // typing in Welcome or a settings input.
-        if (
-          (e.code === "ArrowUp" || e.code === "ArrowDown") &&
-          !inField &&
-          activeWorkspaceIdRef.current
-        ) {
-          const list = workspacesRef.current;
-          const wsId = activeWorkspaceIdRef.current;
-          const idx = list.findIndex((w) => w.id === wsId);
-          if (idx < 0) return;
-          if (e.code === "ArrowUp" && idx === 0) return;
-          if (e.code === "ArrowDown" && idx === list.length - 1) return;
-          e.preventDefault();
-          e.stopPropagation();
-          // moveWorkspace's `to` is the destination index in the
-          // *pre-removal* array (see its `adjusted = from < to ? to - 1
-          // : to` math): up-one is `idx - 1`, down-one is `idx + 2`.
-          const to = e.code === "ArrowUp" ? idx - 1 : idx + 2;
-          moveWorkspace(idx, to);
-          return;
-        }
       }
     };
-    window.addEventListener("keydown", onCaptureKey, true);
-    return () => window.removeEventListener("keydown", onCaptureKey, true);
-    // Listener body reads refs; only `moveWorkspace`'s identity and the
-    // setter identities ever change, and React's setters are stable.
-  }, [
-    moveWorkspace,
-    setActivePaneByWs,
-    setShowShortcutHelp,
-    activeWorkspaceIdRef,
-    workspacesRef,
-  ]);
 
-  // Bubble phase: every other ⌘-modified shortcut.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: handler closes over many in-scope helpers (activateWorkspace, closePane, etc.) that themselves capture state listed in the dep array; honest fix would need a useRef bag, deferred
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      // Only handle pure ⌘ shortcuts. xterm.js leaves ⌘ alone, so
-      // terminals don't swallow these.
-      if (!e.metaKey || e.altKey || e.ctrlKey) return;
-
-      const k = e.key.toLowerCase();
-      const shifted = e.shiftKey;
-
-      // ── Workspaces ─────────────────────────
-      if (k === "t" && !shifted) {
-        e.preventDefault();
-        setActiveView({ kind: "new" });
-        return;
-      }
-      if (k === "w" && shifted && activeWorkspaceIdRef.current) {
-        e.preventDefault();
-        setCloseTargetId(activeWorkspaceIdRef.current);
-        return;
-      }
-      // ⌘⇧] on US layout produces "}", ⌘⇧[ produces "{". Also accept
-      // the physical key positions for non-US layouts.
-      if (
-        activeWorkspaceIdRef.current &&
-        workspaces.length > 1 &&
-        (e.key === "}" || (shifted && e.code === "BracketRight"))
-      ) {
-        e.preventDefault();
-        const cur = activeWorkspaceIdRef.current;
-        const idx = workspaces.findIndex((w) => w.id === cur);
-        const target =
-          idx >= 0 ? workspaces[(idx + 1) % workspaces.length] : undefined;
-        if (target) activateWorkspace(target.id);
-        return;
-      }
-      if (
-        activeWorkspaceIdRef.current &&
-        workspaces.length > 1 &&
-        (e.key === "{" || (shifted && e.code === "BracketLeft"))
-      ) {
-        e.preventDefault();
-        const cur = activeWorkspaceIdRef.current;
-        const idx = workspaces.findIndex((w) => w.id === cur);
-        const target =
-          idx >= 0
-            ? workspaces[(idx - 1 + workspaces.length) % workspaces.length]
-            : undefined;
-        if (target) activateWorkspace(target.id);
-        return;
-      }
-      if (/^[1-9]$/.test(e.key) && !shifted) {
-        const idx = parseInt(e.key, 10) - 1;
-        const target = workspaces[idx];
-        if (target) {
-          e.preventDefault();
-          activateWorkspace(target.id);
-        }
-        return;
-      }
-
-      // ── View ───────────────────────────────
-      if (k === "b" && !shifted) {
-        e.preventDefault();
-        toggleCollapsed();
-        return;
-      }
-      if (e.key === "," && !shifted) {
-        e.preventDefault();
-        setRoute((prev) => (prev === "settings" ? null : "settings"));
-        return;
-      }
-
-      // ── Panes ──────────────────────────────
-      // The grid layout is uniform, so split-horizontal and
-      // split-vertical currently both just append a pane. True
-      // directional splits would need a tree-based layout instead of
-      // cols×rows.
-      // Reading activeWorkspaceIdRef.current (instead of view.id from
-      // the closure) closes the race where ⌘N fires between a workspace
-      // tab click and the next render — we want the new pane in the
-      // *new* workspace, not the stale one captured when the handler
-      // was bound.
-      const wsId = activeWorkspaceIdRef.current;
-      if (!wsId) return;
-      if (k === "n" && !shifted) {
-        e.preventDefault();
-        addPane(wsId);
-        return;
-      }
-      if (k === "d") {
-        e.preventDefault();
-        addPane(wsId);
-        return;
-      }
-      if (k === "w" && !shifted) {
-        e.preventDefault();
-        const activeId = activePaneByWs[wsId];
-        if (activeId) closePane(wsId, activeId);
-        return;
-      }
-      if (k === "z" && !shifted) {
-        e.preventDefault();
-        undoLayout();
-        return;
-      }
-      if (k === "z" && shifted) {
-        e.preventDefault();
-        redoLayout();
-        return;
-      }
-      if (k === "r" && !shifted && restartShortcutEnabled) {
-        e.preventDefault();
-        const activeId = activePaneByWs[wsId];
-        if (activeId) {
-          invoke("restart_pane", { paneId: activeId }).catch((err) =>
-            reportInvokeError("restart_pane", err),
-          );
-        }
-        return;
-      }
-      if (e.key === "]" && !shifted) {
-        e.preventDefault();
-        cyclePane(wsId, 1);
-        return;
-      }
-      if (e.key === "[" && !shifted) {
-        e.preventDefault();
-        cyclePane(wsId, -1);
-        return;
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [
     workspaces,
     activePaneByWs,
+    parsedKeymap,
     restartShortcutEnabled,
     undoLayout,
     redoLayout,
+    moveWorkspace,
   ]);
 }

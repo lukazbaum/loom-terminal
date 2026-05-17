@@ -6,6 +6,7 @@
 /// data falls back to the default rather than crashing the app.
 
 import { useEffect, useState } from "react";
+import { ACTION_IDS, type ActionId, parseChord } from "./keybindings";
 import { pushToastOnce } from "./toast";
 import { BUILTIN_DARK_ID, BUILTIN_LIGHT_ID } from "./themes";
 
@@ -28,6 +29,11 @@ export type Settings = {
   /// On by default for subscription users; API-key users never see the
   /// pills anyway because the backend has no data to feed them.
   showClaudeUsage: boolean;
+  /// Per-action keyboard binding overrides. Stored sparsely — only
+  /// entries the user has changed appear here. Defaults live in
+  /// `keybindings.ts` and get filled in at read time via `mergeKeymap`.
+  /// An empty array for an action means "unbound".
+  keybindings: Partial<Record<ActionId, string[]>>;
 };
 
 export const DEFAULTS: Settings = {
@@ -36,6 +42,7 @@ export const DEFAULTS: Settings = {
   restartShortcutEnabled: false,
   activeThemeId: BUILTIN_DARK_ID,
   showClaudeUsage: true,
+  keybindings: {},
 };
 
 const MIN: Partial<Record<keyof Settings, number>> = {
@@ -62,11 +69,33 @@ function loadFromStorage(): Settings {
   }
 }
 
+function sanitizeKeybindings(
+  raw: unknown,
+): Partial<Record<ActionId, string[]>> | null {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const known = new Set<string>(ACTION_IDS);
+  const out: Partial<Record<ActionId, string[]>> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!known.has(k)) continue;
+    if (!Array.isArray(v)) continue;
+    const cleaned = v.filter(
+      (s): s is string => typeof s === "string" && parseChord(s) !== null,
+    );
+    out[k as ActionId] = cleaned;
+  }
+  return out;
+}
+
 function mergeWithDefaults(partial: Partial<Settings>): Settings {
   const out = { ...DEFAULTS };
   for (const k of Object.keys(DEFAULTS) as (keyof Settings)[]) {
     const v = partial[k];
     if (v === undefined) continue;
+    if (k === "keybindings") {
+      const cleaned = sanitizeKeybindings(v);
+      if (cleaned) out.keybindings = cleaned;
+      continue;
+    }
     if (typeof v !== typeof DEFAULTS[k]) continue;
     if (typeof v === "number") {
       const min = MIN[k];

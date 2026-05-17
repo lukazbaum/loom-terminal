@@ -6,6 +6,7 @@ import { WebPreviewPane } from "./WebPreviewPane";
 import { PaneContextMenu, type PaneMenuItem } from "./PaneContextMenu";
 import { pushToast, reportInvokeError } from "./toast";
 import type { Pane, Session } from "./types";
+import { useActionChord } from "./useActionChord";
 
 const PANE_MIN_PX = 80;
 const COMPLETION_PILL_MS = 6000;
@@ -120,6 +121,8 @@ export const Workspace = memo(function Workspace({
     }
   };
 
+  const closePaneChord = useActionChord("pane.close");
+
   const buildPaneMenu = (pane: Pane): PaneMenuItem[] => {
     const isTerminal = (pane.kind ?? "terminal") === "terminal";
     const pinned = !!session.pinnedPaneIds?.includes(pane.id);
@@ -136,7 +139,7 @@ export const Workspace = memo(function Workspace({
         {
           id: "close",
           label: "Close pane",
-          shortcut: "⌘W",
+          shortcut: closePaneChord,
           tone: "danger",
           disabled: pinned,
           onClick: () => handleClosePane(pane.id),
@@ -167,7 +170,7 @@ export const Workspace = memo(function Workspace({
       {
         id: "close",
         label: "Close pane",
-        shortcut: "⌘W",
+        shortcut: closePaneChord,
         tone: "danger",
         disabled: pinned,
         onClick: () => handleClosePane(pane.id),

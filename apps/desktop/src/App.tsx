@@ -8,6 +8,7 @@ import { AppHeader } from "./AppHeader";
 import { ConfirmCloseModal } from "./ConfirmCloseModal";
 import { shortenHome } from "./format";
 import { KeyboardHelpOverlay } from "./KeyboardHelpOverlay";
+import { mergeKeymap } from "./keybindings";
 import { MainPanes } from "./MainPanes";
 import { PaneContextMenu } from "./PaneContextMenu";
 import { PortsPanel } from "./PortsPanel";
@@ -20,7 +21,6 @@ import {
   type SessionAgent,
 } from "./sessionPersist";
 import { useSettings } from "./settings";
-import { SHORTCUT_GROUPS } from "./shortcuts";
 import {
   Sidebar,
   SIDEBAR_COLLAPSED_KEY,
@@ -217,6 +217,14 @@ function App() {
   useEffect(() => {
     applyTheme(activeTheme);
   }, [activeTheme]);
+
+  /// Effective keymap = built-in defaults overlaid with user overrides.
+  /// Memoized on the overrides object so the dispatcher's parsing pass
+  /// only re-runs when the user actually edits a binding.
+  const keymap = useMemo(
+    () => mergeKeymap(settings.keybindings),
+    [settings.keybindings],
+  );
 
   // App-level drag-drop listener. Tauri's `dragDropEnabled: true`
   // gives us the OS-level file path (WebKit strips it from
@@ -809,6 +817,7 @@ function App() {
     workspacesRef,
     workspaces,
     activePaneByWs,
+    keymap,
     restartShortcutEnabled: settings.restartShortcutEnabled,
     setActivePaneByWs,
     setShowShortcutHelp,
@@ -950,7 +959,7 @@ function App() {
       )}
       {showShortcutHelp && (
         <KeyboardHelpOverlay
-          groups={SHORTCUT_GROUPS}
+          keymap={keymap}
           onClose={() => setShowShortcutHelp(false)}
         />
       )}

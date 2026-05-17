@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import { RateLimitBadge } from "./RateLimitBadge";
 import { GearIcon, PortsIcon, ToolbarButton, ToolbarDivider } from "./Toolbar";
+import { useActionChord } from "./useActionChord";
 
 export type DetectedPortToast = {
   workspace_id: string;
@@ -61,6 +62,7 @@ export function AppHeader({
   onDismissTopPort,
 }: Props) {
   const head = portToasts[0];
+  const settingsChord = useActionChord("view.settings");
   return (
     <>
       <header
@@ -103,7 +105,7 @@ export function AppHeader({
           <ToolbarButton
             icon={<GearIcon />}
             label="Settings"
-            shortcut="⌘,"
+            shortcut={settingsChord}
             description="Preferences and shortcuts"
             tone="mint"
             active={showSettings}

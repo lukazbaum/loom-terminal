@@ -1,32 +1,57 @@
-import { useEffect } from "react";
+import { useMemo } from "react";
 
+import {
+  ACTIONS,
+  formatChordString,
+  formatStaticCombo,
+  type Keymap,
+  type ShortcutGroup,
+  STATIC_ENTRIES,
+} from "./keybindings";
 import { Modal } from "./Modal";
-
-type Shortcut = { combo: string; label: string };
-type ShortcutGroup = { title: string; items: Shortcut[] };
+import { isMac } from "./platform";
 
 type Props = {
-  groups: ShortcutGroup[];
+  keymap: Keymap;
   onClose: () => void;
 };
 
-/// Modal overlay listing every keyboard shortcut. Triggered by `?` from
-/// anywhere outside an input. Same data the Settings page renders, just
-/// surfaced inline so users discover shortcuts without leaving their work.
-export function KeyboardHelpOverlay({ groups, onClose }: Props) {
-  // `?` toggles the overlay closed (in addition to Escape, which the
-  // Modal component already handles). Keep this here since it's a
-  // shortcut-specific binding, not generic modal chrome.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "?") {
-        e.preventDefault();
-        onClose();
-      }
+type RenderedGroup = {
+  title: ShortcutGroup;
+  items: { combo: string; label: string }[];
+};
+
+/// Modal overlay listing every keyboard shortcut. Triggered by the
+/// `view.help` chord (default `?`) from anywhere outside an input. Same
+/// data the Settings page renders, just surfaced inline so users discover
+/// shortcuts without leaving their work. Closing is handled by Escape
+/// (Modal) and by re-pressing the help chord (global dispatcher).
+export function KeyboardHelpOverlay({ keymap, onClose }: Props) {
+  const groups = useMemo<RenderedGroup[]>(() => {
+    const byGroup: Record<ShortcutGroup, RenderedGroup["items"]> = {
+      Workspaces: [],
+      Panes: [],
+      View: [],
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    for (const action of ACTIONS) {
+      const chords = keymap[action.id];
+      const combo =
+        chords.length > 0
+          ? chords.map((c) => formatChordString(c, isMac)).join("  ·  ")
+          : "—";
+      byGroup[action.group].push({ combo, label: action.label });
+    }
+    for (const entry of STATIC_ENTRIES) {
+      byGroup[entry.group].push({
+        combo: formatStaticCombo(entry.combo, isMac),
+        label: entry.label,
+      });
+    }
+    return (["Workspaces", "Panes", "View"] as const).map((g) => ({
+      title: g,
+      items: byGroup[g],
+    }));
+  }, [keymap]);
 
   return (
     <Modal ariaLabel="Keyboard shortcuts" onDismiss={onClose} zIndex={55}>
@@ -35,7 +60,6 @@ export function KeyboardHelpOverlay({ groups, onClose }: Props) {
           <span className="font-sans text-[11px] font-semibold uppercase tracking-[0.22em] text-amber">
             Keyboard Shortcuts
           </span>
-          <span className="font-mono text-[10.5px] text-faint">?</span>
           <button
             type="button"
             onClick={onClose}
@@ -68,8 +92,8 @@ export function KeyboardHelpOverlay({ groups, onClose }: Props) {
           ))}
         </div>
         <div className="shrink-0 border-t border-rule/40 px-5 py-2.5 text-[10.5px] text-faint">
-          Press <span className="font-mono text-muted">?</span> anywhere to open
-          · <span className="font-mono text-muted">Esc</span> to close
+          Customize bindings in Settings ·{" "}
+          <span className="font-mono text-muted">Esc</span> to close
         </div>
       </div>
     </Modal>

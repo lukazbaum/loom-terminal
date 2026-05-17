@@ -1,5 +1,6 @@
 import { pad2 } from "./format";
 import type { Session } from "./types";
+import { useActionChord } from "./useActionChord";
 import {
   ActiveRail,
   computeGutterTarget,
@@ -77,6 +78,8 @@ export function Sidebar({
   onCancelRename,
   onMoveWorkspace,
 }: Props) {
+  const newChord = useActionChord("workspace.new");
+  const sidebarChord = useActionChord("view.toggleSidebar");
   return (
     <nav
       aria-label="Workspaces"
@@ -116,7 +119,13 @@ export function Sidebar({
           type="button"
           onClick={onNewWorkspace}
           aria-current={isNewView ? "page" : undefined}
-          title={collapsed ? "New workspace (⌘T)" : undefined}
+          title={
+            collapsed
+              ? newChord
+                ? `New workspace (${newChord})`
+                : "New workspace"
+              : undefined
+          }
           className={`group relative flex w-full cursor-pointer items-stretch border transition-colors duration-150 ${
             isNewView
               ? "border-amber/45 bg-amber/[0.07]"
@@ -142,7 +151,7 @@ export function Sidebar({
               New workspace
             </span>
           )}
-          {!collapsed && (
+          {!collapsed && newChord && (
             <span
               className={`flex shrink-0 items-center pr-2.5 font-mono text-[9.5px] uppercase tracking-[0.16em] transition-colors duration-150 ${
                 isNewView
@@ -150,7 +159,7 @@ export function Sidebar({
                   : "text-fade group-hover:text-amber/70"
               }`}
             >
-              ⌘T
+              {newChord}
             </span>
           )}
         </button>
@@ -216,8 +225,12 @@ export function Sidebar({
         )}
         {workspaces.length === 0 && !collapsed && (
           <div className="m-1 border border-dashed border-rule/60 bg-transparent px-3 py-3 text-[11px] leading-[1.5] text-faint">
-            No open workspaces. Hit{" "}
-            <span className="font-mono text-muted">⌘T</span> or{" "}
+            No open workspaces.{" "}
+            {newChord ? (
+              <>
+                Hit <span className="font-mono text-muted">{newChord}</span> or{" "}
+              </>
+            ) : null}
             <button
               type="button"
               onClick={onNewWorkspace}
@@ -271,16 +284,24 @@ export function Sidebar({
           collapsed ? "p-1.5" : "flex items-center gap-2 px-2 py-1.5"
         }`}
       >
-        {!collapsed && (
+        {!collapsed && sidebarChord && (
           <span className="font-mono text-[9px] uppercase tracking-[0.18em] text-fade">
-            ⌘B
+            {sidebarChord}
           </span>
         )}
         <button
           type="button"
           onClick={onToggleCollapsed}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          title={collapsed ? "Expand sidebar (⌘B)" : "Collapse sidebar (⌘B)"}
+          title={
+            collapsed
+              ? sidebarChord
+                ? `Expand sidebar (${sidebarChord})`
+                : "Expand sidebar"
+              : sidebarChord
+                ? `Collapse sidebar (${sidebarChord})`
+                : "Collapse sidebar"
+          }
           className={`cursor-pointer text-[13px] leading-none text-faint transition-colors duration-150 hover:bg-ink-2 hover:text-paper ${
             collapsed
               ? "flex w-full items-center justify-center py-1.5"

@@ -2,6 +2,7 @@
 /// Kept in one file so the per-section files (Chrome, PresetsSection,
 /// ComposerSection, HookFooter) don't have to import from each other.
 import { AGENTS, detectAgent } from "../agents";
+import { isMac } from "../platform";
 import type { Preset } from "../presets";
 
 export type HookAgent = "claude" | "codex" | "gemini";
@@ -78,9 +79,7 @@ export function pushRecent(prev: string[], folder: string): string[] {
 
 export const COUNT_OPTIONS = [1, 2, 4, 6, 8, 10] as const;
 
-export const isMac =
-  typeof navigator !== "undefined" &&
-  /Mac|iPhone|iPad/.test(navigator.platform);
+export { isMac };
 export const META = isMac ? "⌘" : "Ctrl";
 
 export type Mode =

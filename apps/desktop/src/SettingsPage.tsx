@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { SHORTCUT_GROUPS } from "./shortcuts";
+import { KeybindingsEditor } from "./KeybindingsEditor";
 import { setSetting, useSettings } from "./settings";
+import { useActionChord } from "./useActionChord";
 import {
   BUILTIN_DARK_ID,
   getThemeOrDefault,
@@ -19,6 +20,7 @@ export function SettingsPage({
 }) {
   const settings = useSettings();
   const themes = useThemes();
+  const restartChord = useActionChord("pane.restart");
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -126,8 +128,12 @@ export function SettingsPage({
               }
             />
             <SettingRow
-              label="⌘R restarts active pane"
-              hint="Off by default — Cmd+R is muscle memory for browser reload, so we only act on it when you opt in."
+              label={
+                restartChord
+                  ? `${restartChord} restarts active pane`
+                  : "Restart shortcut"
+              }
+              hint="Off by default — the default chord is muscle memory for browser reload, so we only act on it when you opt in."
               control={
                 <Toggle
                   checked={settings.restartShortcutEnabled}
@@ -142,28 +148,7 @@ export function SettingsPage({
           <h2 className="mb-5 font-sans text-[11px] font-semibold uppercase tracking-[0.22em] text-faint">
             Keyboard Shortcuts
           </h2>
-          <div className="flex flex-col gap-8">
-            {SHORTCUT_GROUPS.map((group) => (
-              <div key={group.title}>
-                <h3 className="mb-2 font-sans text-[10px] font-medium uppercase tracking-[0.2em] text-muted">
-                  {group.title}
-                </h3>
-                <div className="border-t border-rule/40">
-                  {group.items.map((s) => (
-                    <div
-                      key={s.combo + s.label}
-                      className="flex items-center justify-between border-b border-rule/40 py-2.5"
-                    >
-                      <span className="text-[13px] text-paper">{s.label}</span>
-                      <span className="font-mono text-[12px] tracking-[0.02em] text-amber/85">
-                        {s.combo}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
+          <KeybindingsEditor />
         </section>
       </div>
     </div>
