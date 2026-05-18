@@ -31,7 +31,14 @@ type Props = {
   duplicatePane: (workspaceId: string, paneId: string) => void;
   /// Forwarded to each `<Workspace>`. Workspace re-injects its own id
   /// before bubbling, so this is a single shared identity across panes.
-  handlePaneCompletion: (paneId: string, workspaceId: string) => void;
+  handlePaneCompletion: (
+    paneId: string,
+    workspaceId: string,
+    wasAtBottom: boolean,
+  ) => void;
+  /// Forwarded to each `<Workspace>`. Fires when the user scrolls a
+  /// pane back to the bottom; used to clear the workspace's unread pulse.
+  handlePaneReachedBottom: (paneId: string, workspaceId: string) => void;
 
   /// Welcome plumbing.
   presets: Preset[];
@@ -75,6 +82,7 @@ export function MainPanes({
   togglePinPane,
   duplicatePane,
   handlePaneCompletion,
+  handlePaneReachedBottom,
   presets,
   onLaunch,
   onSavePreset,
@@ -118,6 +126,7 @@ export function MainPanes({
                 onTogglePin={togglePinPane}
                 onDuplicatePane={duplicatePane}
                 onCompletion={handlePaneCompletion}
+                onReachedBottom={handlePaneReachedBottom}
               />
             </ErrorBoundary>
           </div>

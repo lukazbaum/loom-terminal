@@ -136,15 +136,23 @@ export const WorkspaceTab = memo(function WorkspaceTab({
   // affordance space for a drop indicator — disabling there matches how
   // the close × is hidden in collapsed mode.
   const dragEnabled = !isEditing && !collapsed;
+  // Active wins for the tab body (amber border/bg/label) so the
+  // foreground workspace stays unambiguously highlighted. The badge,
+  // though, flips to mint whenever there's unread — a small but high-
+  // contrast indicator on the existing badge surface. Plus a discrete
+  // mint dot pulses at the top-right corner so it's impossible to miss
+  // even when the active tab is amber-saturated. The whole-tab mint
+  // halo (animate-pulse-mint) is too subtle behind the amber bg, so
+  // we don't rely on it for the active+unread case.
   const tabClass = isActive
     ? "border-amber/40 bg-amber/[0.07]"
     : isUnread
       ? "border-mint/55 bg-mint/[0.05] animate-pulse-mint"
       : "border-transparent hover:border-rule hover:bg-ink-2";
-  const badgeClass = isActive
-    ? "border-amber/55 bg-amber/[0.10] text-amber"
-    : isUnread
-      ? "border-mint/55 bg-mint/[0.08] text-mint"
+  const badgeClass = isUnread
+    ? "border-mint/55 bg-mint/[0.10] text-mint"
+    : isActive
+      ? "border-amber/55 bg-amber/[0.10] text-amber"
       : "border-rule/70 text-faint group-hover:border-rule group-hover:text-muted";
   const labelColor = isActive
     ? "text-amber"
@@ -152,7 +160,11 @@ export const WorkspaceTab = memo(function WorkspaceTab({
       ? "text-mint"
       : "text-paper";
   const tooltip = `${label} — ${shortenHome(path)}${
-    isUnread ? "\nAgent finished" : ""
+    isUnread
+      ? isActive
+        ? "\nAgent finished — scroll to bottom to catch up"
+        : "\nAgent finished"
+      : ""
   }`;
   return (
     // The wrapper is draggable (workspace reorder) and the tab body
@@ -234,6 +246,12 @@ export const WorkspaceTab = memo(function WorkspaceTab({
         />
       )}
       {isActive && <ActiveRail />}
+      {isUnread && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute right-1.5 top-1.5 z-10 h-2 w-2 rounded-full bg-mint shadow-[0_0_6px_color-mix(in_oklab,var(--color-mint)_60%,transparent)] animate-pulse-mint"
+        />
+      )}
       {isEditing && !collapsed ? (
         <div className="flex min-w-0 flex-1 items-center gap-2.5 py-1.5 px-1.5">
           <span

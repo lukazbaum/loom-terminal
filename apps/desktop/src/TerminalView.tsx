@@ -111,7 +111,21 @@ type Props = {
   /// the caller-supplied prop — forwarded so the parent can use the same
   /// handler instance for every pane (a per-pane closure was the previous
   /// shape and busted memoization on every parent render).
-  onCompletion?: (paneId: string, signal: CompletionSignal) => void;
+  ///
+  /// `wasAtBottom` reports whether the user's viewport was at the bottom
+  /// of the scrollback when the signal fired. The sidebar uses this to
+  /// distinguish "user saw the result" from "user was reading scrollback
+  /// and missed it" — only the latter should pulse the tab.
+  onCompletion?: (
+    paneId: string,
+    signal: CompletionSignal,
+    wasAtBottom: boolean,
+  ) => void;
+  /// Fired when the user's viewport transitions to the bottom of the
+  /// scrollback (manual scroll-down, content arrival while already
+  /// tracking). Used to clear the "unseen completion" tab pulse: the
+  /// user has caught up, so the workspace can stop nagging.
+  onReachedBottom?: (paneId: string) => void;
 };
 
 type OutputPayload = { id: string; data: string };
@@ -200,6 +214,18 @@ type TermState = {
   /// completions already happened, so snapping yanks the user out of
   /// scrollback they had open before tabbing away.
   replayingSnapshot: boolean;
+  /// Whether the viewport was at the bottom on the last `onScroll`
+  /// dispatch. Used to fire `onReachedBottom` exactly on the up→down
+  /// transition rather than on every chunk arrival while tracking.
+  wasAtBottomLast: boolean;
+  /// Set while `fit.fit()` is running (and the matching `scrollToLine`
+  /// restore). xterm's resize can synchronously snap the viewport to
+  /// the bottom before we restore it, which would otherwise fire
+  /// `onScroll` → `onReachedBottom` and spuriously clear the unread
+  /// pulse even though the user never manually reached the bottom.
+  /// The fit path resyncs `wasAtBottomLast` to the post-restore state
+  /// before clearing this flag.
+  suppressReachedBottom: boolean;
   /// Loaded asynchronously; cleared in the addon's `onContextLoss`
   /// fallback. Held here so cleanup can dispose it.
   webgl: WebglAddonType | null;
@@ -220,6 +246,8 @@ function makeTermState(visible: boolean): TermState {
     idleTimer: null,
     sawLoomStopEver: false,
     replayingSnapshot: false,
+    wasAtBottomLast: true,
+    suppressReachedBottom: false,
     webgl: null,
   };
 }
@@ -264,8 +292,10 @@ function setupWebgl(term: Terminal, state: TermState): void {
 type CompletionCtx = {
   paneId: string;
   onCompletionRef: MutableRefObject<
-    ((paneId: string, signal: CompletionSignal) => void) | undefined
+    | ((paneId: string, signal: CompletionSignal, wasAtBottom: boolean) => void)
+    | undefined
   >;
+  onReachedBottomRef: MutableRefObject<((paneId: string) => void) | undefined>;
   idleTimeoutMsRef: MutableRefObject<number>;
   mountDisposables: IDisposable[];
 };
@@ -290,17 +320,31 @@ function setupCompletionSignals(
       state.idleTimer = null;
     }
     // Snap to bottom on completion so the user doesn't miss the final
-    // bytes after a long-running command. xterm preserves the user's
-    // scroll position during streaming output, but signals are the
-    // moment they actually want to see the result.
-    if (!state.replayingSnapshot) {
+    // bytes after a long-running command — except when the user has
+    // manually scrolled up, which signals they're reading something
+    // and don't want to be yanked away. Without this guard, every
+    // Claude turn end (OSC 9 loom-stop) drags an active reader back
+    // to the bottom.
+    //
+    // `wasAtBottom` is forwarded to onCompletion so the sidebar can
+    // distinguish "user saw it" (skip the unread pulse) from "user
+    // was reading scrollback" (pulse until they catch up).
+    let wasAtBottom = true;
+    try {
+      const buf = term.buffer.active;
+      wasAtBottom = buf.viewportY >= buf.baseY;
+    } catch {
+      // term may be disposing — treat as at-bottom so we don't nag
+      wasAtBottom = true;
+    }
+    if (!state.replayingSnapshot && wasAtBottom) {
       try {
         term.scrollToBottom();
       } catch {
         // term may be disposing — ignore
       }
     }
-    ctx.onCompletionRef.current?.(ctx.paneId, signal);
+    ctx.onCompletionRef.current?.(ctx.paneId, signal, wasAtBottom);
   };
 
   const armIdleTimer = (chunkBytes: number) => {
@@ -318,6 +362,35 @@ function setupCompletionSignals(
     }, ctx.idleTimeoutMsRef.current);
   };
 
+  // Track viewport-bottom transitions so App can clear the "unseen
+  // completion" pulse once the user catches up. Fires only on the
+  // up→down edge — when the user was scrolled up and then either
+  // wheel-scrolled or pressed End / arrowed past the bottom. xterm
+  // emits `onScroll` for any viewport move, including auto-tracking
+  // while content arrives, so dedup-by-transition keeps us from
+  // calling the callback on every chunk.
+  //
+  // `suppressReachedBottom` gates this against fit-induced viewport
+  // snaps. xterm.js resizes can synchronously move the viewport to
+  // the bottom mid-fit before our `scrollToLine` restore lands; that
+  // counts as a programmatic move, not a user catch-up, so the fit
+  // path holds the flag across both calls and resyncs
+  // `wasAtBottomLast` afterward.
+  ctx.mountDisposables.push(
+    term.onScroll(() => {
+      if (state.suppressReachedBottom) return;
+      try {
+        const buf = term.buffer.active;
+        const atBottom = buf.viewportY >= buf.baseY;
+        if (atBottom && !state.wasAtBottomLast) {
+          ctx.onReachedBottomRef.current?.(ctx.paneId);
+        }
+        state.wasAtBottomLast = atBottom;
+      } catch {
+        // term may be disposing — ignore
+      }
+    }),
+  );
   ctx.mountDisposables.push(
     term.onBell(() => {
       if (state.sawLoomStopEver) return;
@@ -559,6 +632,29 @@ function wireResizeAndFit(
       if (!wasForce && w === lastFitWidth && h === lastFitHeight) return;
       lastFitWidth = w;
       lastFitHeight = h;
+      // Save the user's scroll position so a layout shift unrelated
+      // to their content (header banner appearing, sidebar drag,
+      // window resize) doesn't snap them to the bottom. xterm's
+      // resize anchors the viewport to the cursor, which feels like
+      // a scroll-reset when the user was reading scrollback.
+      //
+      // `suppressReachedBottom` is held across the whole fit+restore
+      // block: xterm's resize fires `onScroll` synchronously when it
+      // snaps the viewport, which would otherwise be misread as the
+      // user catching up and clear the unread pulse. We resync
+      // `wasAtBottomLast` to the post-restore state before clearing
+      // the flag so the next genuine user scroll computes its
+      // transition correctly.
+      let savedViewportY: number | null = null;
+      try {
+        const buf = term.buffer.active;
+        if (buf.viewportY < buf.baseY) {
+          savedViewportY = buf.viewportY;
+        }
+      } catch {
+        // term may be disposing
+      }
+      state.suppressReachedBottom = true;
       try {
         fit.fit();
         // Force a redraw too — xterm's renderer can desync after the
@@ -571,6 +667,20 @@ function wireResizeAndFit(
         // eslint-disable-next-line no-console
         console.warn("[loom] fit.fit() failed", err);
       }
+      if (savedViewportY !== null) {
+        try {
+          term.scrollToLine(savedViewportY);
+        } catch {
+          // term may be disposing
+        }
+      }
+      try {
+        const buf = term.buffer.active;
+        state.wasAtBottomLast = buf.viewportY >= buf.baseY;
+      } catch {
+        // term may be disposing
+      }
+      state.suppressReachedBottom = false;
     }, 80);
   };
   const forceFit = () => {
@@ -654,6 +764,7 @@ export const TerminalView = memo(function TerminalView({
   fontSize,
   idleQuietMs,
   onCompletion,
+  onReachedBottom,
 }: Props) {
   // Splice the agent-specific resume flag here, at spawn time — not in
   // the persisted command — so a fresh capture after `/clear` isn't
@@ -669,6 +780,10 @@ export const TerminalView = memo(function TerminalView({
   useEffect(() => {
     onCompletionRef.current = onCompletion;
   }, [onCompletion]);
+  const onReachedBottomRef = useRef(onReachedBottom);
+  useEffect(() => {
+    onReachedBottomRef.current = onReachedBottom;
+  }, [onReachedBottom]);
 
   // Subscribe to live settings so a Settings-page edit propagates without
   // needing the parent to plumb props down.
@@ -793,6 +908,7 @@ export const TerminalView = memo(function TerminalView({
     const { armIdleTimer } = setupCompletionSignals(term, state, {
       paneId,
       onCompletionRef,
+      onReachedBottomRef,
       idleTimeoutMsRef,
       mountDisposables,
     });

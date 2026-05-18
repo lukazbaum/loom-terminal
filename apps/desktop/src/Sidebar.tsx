@@ -243,7 +243,12 @@ export function Sidebar({
         )}
         {workspaces.map((w, i) => {
           const isActive = activeWorkspaceId === w.id;
-          const isUnread = !isActive && unread.has(w.id);
+          // Active workspaces can ALSO be unread now — when the user is
+          // on this workspace but scrolled up reading scrollback, a
+          // completion still pulses the tab so they don't miss that
+          // Claude finished. Cleared by activating (handled in App) or
+          // by scrolling the pane back to the bottom.
+          const isUnread = unread.has(w.id);
           const shellCount = w.panes.filter(
             (p) => (p.kind ?? "terminal") === "terminal",
           ).length;

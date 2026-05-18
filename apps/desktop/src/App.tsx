@@ -168,7 +168,21 @@ function App() {
   const [resizing, setResizing] = useState(false);
   const widthRef = useRef(width);
   const [closeTargetId, setCloseTargetId] = useState<string | null>(null);
-  const [unread, setUnread] = useState<Set<string>>(() => new Set());
+  // Per-pane unread tracking: workspace id → set of pane ids whose
+  // last completion the user hasn't caught up on. Tracking at the
+  // pane level (not the workspace level) means scrolling pane A2 to
+  // the bottom doesn't clear an unseen completion in pane A1 — only
+  // the pane that triggered the unread can clear its own entry.
+  // The workspace tab pulses whenever its entry has any panes; once
+  // every pane reaches the bottom (or the user activates the
+  // workspace), the entry is removed.
+  const [unread, setUnread] = useState<Map<string, Set<string>>>(
+    () => new Map(),
+  );
+  // Sidebar only needs to know "is this workspace's tab unread?", so
+  // derive a Set of ids it can `has()`. Memoized on the underlying
+  // Map identity so unrelated state churn doesn't rebuild it.
+  const unreadWorkspaceIds = useMemo(() => new Set(unread.keys()), [unread]);
   /// Modal-page route. `null` = workspace view. `settings` and
   /// `themeEditor` are full-screen overlays; modeling them as one
   /// state field keeps the "open one, close the others" invariant
@@ -405,15 +419,26 @@ function App() {
   }, []);
   const { presets, createPreset, updatePreset, deletePreset } = usePresets();
 
-  const markUnread = useCallback((wsId: string) => {
-    if (activeRef.current === wsId) return;
-    setUnread((prev) => {
-      if (prev.has(wsId)) return prev;
-      const next = new Set(prev);
-      next.add(wsId);
-      return next;
-    });
-  }, []);
+  const markPaneUnread = useCallback(
+    (wsId: string, paneId: string, wasAtBottom: boolean) => {
+      // Skip the pulse only when the user is actually looking at this
+      // workspace AND was at the bottom of the relevant pane — they
+      // saw the result, no need to nag. When they're on a different
+      // workspace, or scrolled up in this one reading scrollback, the
+      // tab pulses so they don't miss that Claude finished.
+      if (activeRef.current === wsId && wasAtBottom) return;
+      setUnread((prev) => {
+        const existing = prev.get(wsId);
+        if (existing?.has(paneId)) return prev;
+        const next = new Map(prev);
+        const nextSet = new Set(existing ?? []);
+        nextSet.add(paneId);
+        next.set(wsId, nextSet);
+        return next;
+      });
+    },
+    [],
+  );
 
   /// Stable per-app handler for "this pane just finished a turn". Passed
   /// through Workspace to TerminalView. Workspace injects its own
@@ -422,32 +447,54 @@ function App() {
   /// inline arrow inside `.map()` and produced a fresh identity each
   /// parent render).
   const handlePaneCompletion = useCallback(
-    (_paneId: string, workspaceId: string) => {
+    (paneId: string, workspaceId: string, wasAtBottom: boolean) => {
       // The "done" pill is rendered locally by the workspace that owns
       // the pane; App's job here is just to pulse the sidebar tab.
-      markUnread(workspaceId);
+      markPaneUnread(workspaceId, paneId, wasAtBottom);
     },
-    [markUnread],
+    [markPaneUnread],
   );
 
-  const clearUnread = (wsId: string) => {
+  const clearPaneUnread = useCallback((wsId: string, paneId: string) => {
+    setUnread((prev) => {
+      const existing = prev.get(wsId);
+      if (!existing?.has(paneId)) return prev;
+      const next = new Map(prev);
+      const nextSet = new Set(existing);
+      nextSet.delete(paneId);
+      if (nextSet.size === 0) {
+        next.delete(wsId);
+      } else {
+        next.set(wsId, nextSet);
+      }
+      return next;
+    });
+  }, []);
+
+  const clearWorkspaceUnread = useCallback((wsId: string) => {
     setUnread((prev) => {
       if (!prev.has(wsId)) return prev;
-      const next = new Set(prev);
+      const next = new Map(prev);
       next.delete(wsId);
       return next;
     });
-  };
+  }, []);
+
+  /// Pane scrolled to the bottom — the user has caught up on whatever
+  /// they were reading in *this* pane, so drop its entry. The workspace
+  /// stops pulsing only when every pane with pending unread has been
+  /// caught up on (i.e. its set becomes empty).
+  const handlePaneReachedBottom = useCallback(
+    (paneId: string, workspaceId: string) => {
+      clearPaneUnread(workspaceId, paneId);
+    },
+    [clearPaneUnread],
+  );
 
   const activateWorkspace = useCallback(
     (id: string) => {
       setActiveView({ kind: "workspace", id });
-      setUnread((prev) => {
-        if (!prev.has(id)) return prev;
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
+      clearWorkspaceUnread(id);
       setActivePaneByWs((prev) => {
         if (prev[id]) return prev;
         // Read latest workspaces via ref so this callback stays stable across
@@ -459,7 +506,7 @@ function App() {
         return { ...prev, [id]: firstPane.id };
       });
     },
-    [setActiveView],
+    [setActiveView, clearWorkspaceUnread],
   );
 
   const requestCloseWorkspace = useCallback((id: string) => {
@@ -589,11 +636,15 @@ function App() {
       const remaining = ws.panes.filter((p) => p.id !== paneId);
       const nextActive = remaining[Math.min(idx, remaining.length - 1)];
       dispatchWorkspaces({ type: "removePane", wsId, paneId });
+      // Drop any pending unread entry for the closed pane — without
+      // this, a stale paneId would keep the workspace tab pulsing
+      // forever (no `onReachedBottom` will ever fire for a gone pane).
+      clearPaneUnread(wsId, paneId);
       if (nextActive) {
         setActivePaneByWs((prev) => ({ ...prev, [wsId]: nextActive.id }));
       }
     },
-    [captureLayoutSnapshot, dispatchWorkspaces],
+    [captureLayoutSnapshot, dispatchWorkspaces, clearPaneUnread],
   );
 
   const togglePinPane = useCallback(
@@ -770,7 +821,7 @@ function App() {
       else setActiveView({ kind: "workspace", id: last.id });
     }
     dispatchWorkspaces({ type: "remove", wsId: id });
-    clearUnread(id);
+    clearWorkspaceUnread(id);
     setActivePaneByWs((prev) => {
       if (!(id in prev)) return prev;
       const { [id]: _removed, ...rest } = prev;
@@ -874,7 +925,7 @@ function App() {
           workspaces={workspaces}
           activeWorkspaceId={view.kind === "workspace" ? view.id : null}
           isNewView={isNewView}
-          unread={unread}
+          unread={unreadWorkspaceIds}
           collapsed={collapsed}
           resizing={resizing}
           gutterDropTarget={gutterDropTarget}
@@ -913,6 +964,7 @@ function App() {
           togglePinPane={togglePinPane}
           duplicatePane={duplicatePane}
           handlePaneCompletion={handlePaneCompletion}
+          handlePaneReachedBottom={handlePaneReachedBottom}
           presets={presets}
           onLaunch={launchWorkspace}
           onSavePreset={createPreset}

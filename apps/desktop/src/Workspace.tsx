@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
-import { TerminalView } from "./TerminalView";
+import { TerminalView, type CompletionSignal } from "./TerminalView";
 import { WebPreviewPane } from "./WebPreviewPane";
 import { PaneContextMenu, type PaneMenuItem } from "./PaneContextMenu";
 import { pushToast, reportInvokeError } from "./toast";
@@ -26,6 +26,7 @@ export const Workspace = memo(function Workspace({
   onTogglePin,
   onDuplicatePane,
   onCompletion,
+  onReachedBottom,
 }: {
   session: Session;
   activePaneId: string | null;
@@ -41,7 +42,16 @@ export const Workspace = memo(function Workspace({
   /// Fired when a pane in this workspace finishes a turn. Workspace
   /// injects its own `workspaceId` before bubbling, so callers can use
   /// a single stable handler for every pane across every workspace.
-  onCompletion?: (paneId: string, workspaceId: string) => void;
+  /// `wasAtBottom` tells the caller whether the user actually saw the
+  /// result — used to decide whether to pulse the tab.
+  onCompletion?: (
+    paneId: string,
+    workspaceId: string,
+    wasAtBottom: boolean,
+  ) => void;
+  /// Fired when the user scrolls a pane back to the bottom. Used to
+  /// clear the "unseen completion" tab pulse once they've caught up.
+  onReachedBottom?: (paneId: string, workspaceId: string) => void;
 }) {
   const [paneMenu, setPaneMenu] = useState<{
     paneId: string;
@@ -67,7 +77,7 @@ export const Workspace = memo(function Workspace({
   /// React.memo.
   const wsId = session.id;
   const handleTerminalCompletion = useCallback(
-    (paneId: string) => {
+    (paneId: string, _signal: CompletionSignal, wasAtBottom: boolean) => {
       const now = Date.now();
       setPaneCompletions((prev) => {
         // Prune entries past the pill's visible window so the map can't
@@ -82,9 +92,15 @@ export const Workspace = memo(function Workspace({
         next[paneId] = { signal: "idle", at: now };
         return next;
       });
-      onCompletion?.(paneId, wsId);
+      onCompletion?.(paneId, wsId, wasAtBottom);
     },
     [onCompletion, wsId],
+  );
+  const handleTerminalReachedBottom = useCallback(
+    (paneId: string) => {
+      onReachedBottom?.(paneId, wsId);
+    },
+    [onReachedBottom, wsId],
   );
   const handleActivatePane = useCallback(
     (paneId: string) => onActivatePane(wsId, paneId),
@@ -503,6 +519,7 @@ export const Workspace = memo(function Workspace({
                   visible={visible}
                   idleQuietMs={session.idleQuietMs}
                   onCompletion={handleTerminalCompletion}
+                  onReachedBottom={handleTerminalReachedBottom}
                 />
               )}
             </div>
