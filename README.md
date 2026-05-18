@@ -209,14 +209,13 @@ are still moving fast.
 - Dev-server port detection + iframe preview
 - 4 MiB-per-pane ring buffer scrollback
 - Per-pane environment overrides
-- In-app settings (font size, idle window, themes, keyboard shortcut overview)
+- In-app settings (font size, idle window, themes, rebindable keyboard shortcuts, agent-completion sound)
 
 </td>
 <td width="50%" valign="top">
 
 **Not yet**
 
-- Keyboard shortcut rebinding (the overview's read-only today)
 - Standalone CLI for headless workspace launch
 - Full-text search over pane scrollback
 - Signed / notarized binaries (`bun run tauri build` works; Gatekeeper / SmartScreen flag the result)
@@ -244,7 +243,7 @@ and `cargo test --all-targets`:
 bun run check
 ```
 
-Today: 118 Rust unit tests + 30 frontend tests.
+Today: 127 Rust unit tests + 147 frontend tests.
 
 ## License
 
