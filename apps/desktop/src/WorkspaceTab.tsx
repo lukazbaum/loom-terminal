@@ -19,7 +19,7 @@ export function ActiveRail() {
   return (
     <span
       aria-hidden
-      className="absolute left-0 top-1/2 h-5 w-[2px] -translate-y-1/2 bg-amber shadow-[0_0_8px_rgba(245,163,90,0.45)]"
+      className="absolute left-0 top-1/2 h-5 w-[2px] -translate-y-1/2 bg-amber shadow-[0_0_8px_color-mix(in_srgb,_var(--color-amber)_45%,_transparent)]"
     />
   );
 }
@@ -236,13 +236,13 @@ export const WorkspaceTab = memo(function WorkspaceTab({
       {dropPos === "before" && (
         <div
           aria-hidden
-          className="pointer-events-none absolute -top-[3px] left-0 right-0 z-10 h-[2px] bg-amber shadow-[0_0_6px_rgba(245,163,90,0.55)]"
+          className="pointer-events-none absolute -top-[3px] left-0 right-0 z-10 h-[2px] bg-amber shadow-[0_0_6px_color-mix(in_srgb,_var(--color-amber)_55%,_transparent)]"
         />
       )}
       {dropPos === "after" && (
         <div
           aria-hidden
-          className="pointer-events-none absolute -bottom-[3px] left-0 right-0 z-10 h-[2px] bg-amber shadow-[0_0_6px_rgba(245,163,90,0.55)]"
+          className="pointer-events-none absolute -bottom-[3px] left-0 right-0 z-10 h-[2px] bg-amber shadow-[0_0_6px_color-mix(in_srgb,_var(--color-amber)_55%,_transparent)]"
         />
       )}
       {isActive && <ActiveRail />}

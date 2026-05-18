@@ -353,7 +353,7 @@ function CountChips({
             onClick={() => onChange(n)}
             className={`relative cursor-pointer border px-0 py-3 font-mono text-[16px] font-medium leading-none tracking-[-0.01em] transition-colors duration-200 [font-feature-settings:'tnum'] active:scale-95 ${
               isActive
-                ? "border-amber bg-amber/[0.08] text-amber shadow-[0_0_24px_rgba(245,163,90,0.18)_inset]"
+                ? "border-amber bg-amber/[0.08] text-amber shadow-[0_0_24px_color-mix(in_srgb,_var(--color-amber)_18%,_transparent)_inset]"
                 : "border-rule bg-transparent text-muted hover:border-amber-soft hover:bg-amber/[0.04] hover:text-paper"
             }`}
           >
@@ -388,7 +388,7 @@ function CustomCountChip({
       aria-label="Custom terminal count"
       className={`relative flex cursor-text items-center justify-center border px-0 py-3 font-mono text-[16px] font-medium leading-none tracking-[-0.01em] transition-colors duration-200 [font-feature-settings:'tnum'] ${
         active
-          ? "border-amber bg-amber/[0.08] text-amber shadow-[0_0_24px_rgba(245,163,90,0.18)_inset]"
+          ? "border-amber bg-amber/[0.08] text-amber shadow-[0_0_24px_color-mix(in_srgb,_var(--color-amber)_18%,_transparent)_inset]"
           : "border-rule bg-transparent text-muted hover:border-amber-soft hover:bg-amber/[0.04] hover:text-paper"
       }`}
     >

@@ -401,8 +401,12 @@ export function Welcome({
     <main
       className="relative h-full overflow-y-auto px-10 py-12"
       style={{
+        // Theme-aware: two corner blobs tinted by the accent (`amber`)
+        // at low alpha, over a base gradient stepping from ink0 to ink1.
+        // `color-mix` is what lets us apply alpha to a hex variable from
+        // the theme registry inline.
         background:
-          "radial-gradient(900px 500px at 78% 18%, rgba(245,163,90,0.045), transparent 60%), radial-gradient(700px 600px at 8% 96%, rgba(245,163,90,0.025), transparent 60%), linear-gradient(180deg, #0a0a0c 0%, #0e0e11 100%)",
+          "radial-gradient(900px 500px at 78% 18%, color-mix(in srgb, var(--color-amber) 4.5%, transparent), transparent 60%), radial-gradient(700px 600px at 8% 96%, color-mix(in srgb, var(--color-amber) 2.5%, transparent), transparent 60%), linear-gradient(180deg, var(--color-ink-0) 0%, var(--color-ink-1) 100%)",
       }}
     >
       <div

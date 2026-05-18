@@ -220,7 +220,7 @@ export function Sidebar({
         {gutterDropTarget === "top" && (
           <div
             aria-hidden
-            className="pointer-events-none h-[2px] w-full bg-amber shadow-[0_0_6px_rgba(245,163,90,0.55)]"
+            className="pointer-events-none h-[2px] w-full bg-amber shadow-[0_0_6px_color-mix(in_srgb,_var(--color-amber)_55%,_transparent)]"
           />
         )}
         {workspaces.length === 0 && !collapsed && (
@@ -279,7 +279,7 @@ export function Sidebar({
         {gutterDropTarget === "bottom" && (
           <div
             aria-hidden
-            className="pointer-events-none h-[2px] w-full bg-amber shadow-[0_0_6px_rgba(245,163,90,0.55)]"
+            className="pointer-events-none h-[2px] w-full bg-amber shadow-[0_0_6px_color-mix(in_srgb,_var(--color-amber)_55%,_transparent)]"
           />
         )}
       </div>
