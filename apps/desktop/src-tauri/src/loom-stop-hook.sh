@@ -20,7 +20,8 @@
 
 set -u
 
-exec >/dev/tty 2>/dev/null || exec >/dev/null
+exec 2>/dev/null
+exec >/dev/tty || exec >/dev/null
 
 emit_stop() { printf '\033]9;loom-stop\033\\'; }
 # Default to Stop semantics; the python helper disarms via rc=10 on
@@ -65,6 +66,7 @@ def has_transcript_content(path):
     except Exception:
         return False
 
+pane_id = os.environ.get("LOOM_PANE_ID")
 if session_id and (event == "Stop" or has_transcript_content(transcript)):
     # Sidecar transport: per-pane file the Loom backend polls. Required
     # on Claude 2.1.142+ which captures hook stdout/stderr AND detaches
@@ -72,7 +74,6 @@ if session_id and (event == "Stop" or has_transcript_content(transcript)):
     # `/dev/tty` route bytes back to our PTY. The OSC marker below is
     # the original transport, kept for older builds where /dev/tty
     # still reaches the pane.
-    pane_id = os.environ.get("LOOM_PANE_ID")
     if pane_id:
         try:
             home = os.path.expanduser("~")
@@ -89,6 +90,29 @@ if session_id and (event == "Stop" or has_transcript_content(transcript)):
             pass
     sys.stdout.write("\x1b]9;loom-session;" + session_id + "\x1b\\")
     sys.stdout.flush()
+
+# Stops sidecar: a parallel transport for the `loom-stop` completion
+# signal. The OSC marker above only reaches the PTY on older Claude
+# builds whose hooks still inherit the controlling TTY; on 2.1.142+
+# the OSC byte goes to /dev/null. The backend polls
+# `~/.loom/stops/<pane_id>` mtimes and emits a `loom-stop-captured`
+# Tauri event on each newer write. SessionStart writes are suppressed
+# (no `loom-stop` semantics) so a fresh session boot does not fire a
+# spurious completion.
+if event == "Stop" and pane_id:
+    try:
+        home = os.path.expanduser("~")
+        stops_dir = os.path.join(home, ".loom", "stops")
+        os.makedirs(stops_dir, exist_ok=True)
+        stops_path = os.path.join(stops_dir, pane_id)
+        tmp_path = stops_path + ".tmp"
+        with open(tmp_path, "w") as f:
+            # Content is irrelevant — the poller keys on mtime. We still
+            # write something so an editor or `cat` shows non-empty.
+            f.write("loom-stop\n")
+        os.replace(tmp_path, stops_path)
+    except Exception:
+        pass
 
 # SessionStart only needs the session marker; suppress the `loom-stop`
 # EXIT trap by signaling rc=10 to the shell wrapper.

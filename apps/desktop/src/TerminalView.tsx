@@ -4,9 +4,11 @@ import type { IDisposable, Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import type { WebglAddon as WebglAddonType } from "@xterm/addon-webgl";
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
 import { reportInvokeError } from "./toast";
 import { useSetting } from "./settings";
+import { detectAgent } from "./agents";
 import { resumeAwareCommand, type SessionAgent } from "./sessionPersist";
 import { acquireTerminal, releaseTerminal } from "./terminalPool";
 import { getThemeOrDefault, useThemes, xtermThemeFromTheme } from "./themes";
@@ -209,6 +211,18 @@ type TermState = {
   /// Claude/Codex/Gemini sessions (permission prompts, shell integration,
   /// mid-turn tool-call pauses).
   sawLoomStopEver: boolean;
+  /// Set at spawn for agents where Loom installs a per-turn Stop hook
+  /// (Claude, Codex). For these, `loom-stop` is the authoritative
+  /// completion signal — bell / OSC 133 / idle are redundant fallbacks
+  /// that false-fire during normal mid-turn pauses *before* the first
+  /// Stop hook lands. Silencing them from spawn (rather than waiting
+  /// for the first loom-stop to latch `sawLoomStopEver`) eliminates
+  /// the first-turn false-positive window.
+  ///
+  /// Gemini gets no Stop hook (only SessionStart), so it must keep
+  /// the fallbacks live — `expectsStopHook` is false there. Same for
+  /// shell / custom panes.
+  expectsStopHook: boolean;
   /// True while the resume path is writing catch-up bytes. Suppresses
   /// `scrollToBottom` for OSC signals embedded in the replay — those
   /// completions already happened, so snapping yanks the user out of
@@ -231,7 +245,7 @@ type TermState = {
   webgl: WebglAddonType | null;
 };
 
-function makeTermState(visible: boolean): TermState {
+function makeTermState(visible: boolean, expectsStopHook: boolean): TermState {
   return {
     disposed: false,
     id: null,
@@ -245,6 +259,7 @@ function makeTermState(visible: boolean): TermState {
     burstBytes: 0,
     idleTimer: null,
     sawLoomStopEver: false,
+    expectsStopHook,
     replayingSnapshot: false,
     wasAtBottomLast: true,
     suppressReachedBottom: false,
@@ -352,7 +367,12 @@ function setupCompletionSignals(
     if (state.idleTimer !== null) window.clearTimeout(state.idleTimer);
     state.idleTimer = window.setTimeout(() => {
       state.idleTimer = null;
-      if (state.sawLoomStopEver) return;
+      // Belt-and-braces: the pause path cancels pending timers before
+      // flipping mode to paused, but if a fresh chunk re-armed one in
+      // the same tick (or `resuming` fires during snapshot replay) we
+      // don't want a stale "completion" emerging from a non-live pane.
+      if (state.mode !== "live") return;
+      if (state.sawLoomStopEver || state.expectsStopHook) return;
       if (
         state.hasInputSinceSignal &&
         state.burstBytes >= IDLE_MIN_BURST_BYTES
@@ -393,13 +413,19 @@ function setupCompletionSignals(
   );
   ctx.mountDisposables.push(
     term.onBell(() => {
-      if (state.sawLoomStopEver) return;
+      if (state.sawLoomStopEver || state.expectsStopHook) return;
       fireSignal("bell");
     }),
   );
   ctx.mountDisposables.push(
     term.parser.registerOscHandler(133, (data) => {
-      if (!state.sawLoomStopEver && data.startsWith("D")) fireSignal("osc133");
+      if (
+        !state.sawLoomStopEver &&
+        !state.expectsStopHook &&
+        data.startsWith("D")
+      ) {
+        fireSignal("osc133");
+      }
       return false;
     }),
   );
@@ -415,6 +441,43 @@ function setupCompletionSignals(
       return false;
     }),
   );
+  // Sidecar transport for the same `loom-stop` signal — required on
+  // Claude 2.1.142+ / Codex builds that detach the hook from the
+  // controlling TTY, where the OSC byte above never reaches our PTY
+  // and the OSC handler above never fires. The backend's stops-poller
+  // watches `~/.loom/stops/<pane_id>` mtimes and emits this event on
+  // every fresh write. We filter by `pane_id` since the event is
+  // broadcast to every TerminalView listener.
+  //
+  // On older Claude builds where the OSC transport DOES work, both
+  // paths fire per turn. The redundancy is harmless — `markUnread` is
+  // a set-add (idempotent), and `fireSignal`'s state resets land on
+  // already-zeroed fields. Avoids the complexity of cross-transport
+  // dedup for no user-visible benefit.
+  {
+    let unlisten: UnlistenFn | null = null;
+    let cancelled = false;
+    listen<{ pane_id: string }>("loom-stop-captured", (event) => {
+      if (cancelled) return;
+      if (event.payload.pane_id !== ctx.paneId) return;
+      state.sawLoomStopEver = true;
+      fireSignal("bell");
+    })
+      .then((u) => {
+        if (cancelled) u();
+        else unlisten = u;
+      })
+      .catch((err) => {
+        // eslint-disable-next-line no-console
+        console.warn("[loom] failed to subscribe to loom-stop-captured", err);
+      });
+    ctx.mountDisposables.push({
+      dispose: () => {
+        cancelled = true;
+        unlisten?.();
+      },
+    });
+  }
 
   return { fireSignal, armIdleTimer };
 }
@@ -489,7 +552,6 @@ function wirePauseResume(
   term: Terminal,
   state: TermState,
   decoder: TextDecoder,
-  armIdleTimer: (chunkBytes: number) => void,
 ): { setVisible: (v: boolean) => void } {
   return {
     setVisible: (v: boolean) => {
@@ -565,14 +627,27 @@ function wirePauseResume(
       } else if (!v && state.mode === "live") {
         // Flush any RAF-pending output to xterm before recording the
         // pause cursor, so the snapshot_since on resume doesn't
-        // re-deliver bytes we've already shown.
+        // re-deliver bytes we've already shown. Keep the burst-byte
+        // accounting (used by the idle fallback) consistent without
+        // re-arming the timer — see the cancellation below.
         if (state.pendingOutput) {
           const text = state.pendingOutput;
           const bytes = state.pendingOutputBytes;
           state.pendingOutput = "";
           state.pendingOutputBytes = 0;
+          state.burstBytes += bytes;
           term.write(text);
-          armIdleTimer(bytes);
+        }
+        // Cancel any pending idle timer. Otherwise it would fire ~1.2s
+        // later while the pane is paused — with no chunks arriving to
+        // re-arm it, and `hasInputSinceSignal` still true from the
+        // user's last keystroke, the callback would emit a spurious
+        // "completion" signal even though the agent is still working.
+        // This was the "switch workspace right after typing → tab
+        // turns green a second later" repro.
+        if (state.idleTimer !== null) {
+          window.clearTimeout(state.idleTimer);
+          state.idleTimer = null;
         }
         state.mode = "paused";
         (async () => {
@@ -901,7 +976,17 @@ export const TerminalView = memo(function TerminalView({
     // before the Terminal goes back to the pool. Missing one would mean
     // a stale closure firing on the NEXT pane that gets this instance.
     const mountDisposables: IDisposable[] = [];
-    const state = makeTermState(visibleRef.current);
+    // Claude and Codex install per-turn Stop hooks that emit OSC 9
+    // `loom-stop` — that's the authoritative completion signal for
+    // those agents. For them we silence the bell / OSC 133 / idle
+    // fallbacks from spawn so first-turn pauses don't produce
+    // spurious green-pulse signals before the hook lands. Gemini /
+    // shell / custom keep the fallbacks live (Gemini has only
+    // SessionStart, no Stop hook).
+    const detectedAgent = detectAgent(command ?? "");
+    const expectsStopHook =
+      detectedAgent === "claude" || detectedAgent === "codex";
+    const state = makeTermState(visibleRef.current, expectsStopHook);
     const decoder = new TextDecoder("utf-8", { fatal: false });
 
     setupWebgl(term, state);
@@ -918,12 +1003,7 @@ export const TerminalView = memo(function TerminalView({
       armIdleTimer,
       decoder,
     );
-    pauseControlsRef.current = wirePauseResume(
-      term,
-      state,
-      decoder,
-      armIdleTimer,
-    );
+    pauseControlsRef.current = wirePauseResume(term, state, decoder);
     const teardownResize = wireResizeAndFit(term, fit, host, state);
 
     requestAnimationFrame(() => fit.fit());

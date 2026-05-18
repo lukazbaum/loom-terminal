@@ -14,6 +14,7 @@ mod pty;
 mod pty_buffer;
 mod rate_limits;
 mod shell_env;
+mod stops_poller;
 mod usage_poller;
 mod workspace_cmds;
 
@@ -262,6 +263,15 @@ pub fn run() {
             // badge regardless of where the user's actual claude
             // sessions live.
             usage_poller::start(app.handle().clone());
+
+            // Spawn the stops poller. Watches per-pane sidecar files
+            // at ~/.loom/stops/<pane_id> for `loom-stop` writes — the
+            // out-of-band transport that survives Claude 2.1.142+
+            // detaching its hooks from the controlling TTY (which
+            // makes the in-band OSC marker a no-op). Emits
+            // `loom-stop-captured` to the frontend so TerminalView
+            // can fire the completion path.
+            stops_poller::start(app.handle().clone());
 
             // Per-agent consent gate. We only auto-install or auto-upgrade
             // hooks for agents the user previously opted into. First run

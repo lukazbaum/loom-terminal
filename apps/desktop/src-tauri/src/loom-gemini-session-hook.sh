@@ -13,7 +13,8 @@
 
 set -u
 
-exec 3>/dev/tty 2>/dev/null || exec 3>/dev/null
+exec 2>/dev/null
+exec 3>/dev/tty || exec 3>/dev/null
 
 cat | python3 -c '
 import json, os, sys
@@ -34,7 +35,7 @@ except Exception:
 # Gemini only registers SessionStart, so we never see a Stop event with
 # a guaranteed-written transcript. Capture only when the file is on
 # disk with content — otherwise a fresh `gemini` session that the user
-# never typed into would persist a bogus id and the next launch's
+# never typed into would persist a bogus id and the next launch
 # `gemini --resume <id>` would fail.
 def has_transcript_content(path):
     if not path:

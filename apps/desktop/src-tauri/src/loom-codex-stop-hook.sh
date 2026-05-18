@@ -17,7 +17,8 @@ set -u
 
 # Open fd 3 to the controlling TTY; fall back to /dev/null so writes
 # silently succeed when there's no TTY (e.g. Codex run headless).
-exec 3>/dev/tty 2>/dev/null || exec 3>/dev/null
+exec 2>/dev/null
+exec 3>/dev/tty || exec 3>/dev/null
 
 emit_stop() { printf '\033]9;loom-stop\033\\' >&3 2>/dev/null || true; }
 trap emit_stop EXIT
@@ -51,7 +52,7 @@ def emit_osc(s):
         pass
 
 # Same has_transcript_content guard as the Claude hook: avoid capturing
-# an id on SessionStart of a fresh session where the transcript hasn't
+# an id on SessionStart of a fresh session where the transcript has not
 # been written yet — `codex resume <bogus>` would error on the next
 # launch.
 def has_transcript_content(path):
@@ -63,12 +64,12 @@ def has_transcript_content(path):
         return False
 
 transcript = hook_input.get("transcript_path")
+pane_id = os.environ.get("LOOM_PANE_ID")
 if session_id and (event == "Stop" or has_transcript_content(transcript)):
     # Per-pane sidecar at ~/.loom/sessions/<pane_id> that the Loom
     # backend reads. Survives hosts that capture hook stdout/stderr or
     # detach the hook from the controlling TTY (which is how every byte
     # from `emit_osc` below silently disappears).
-    pane_id = os.environ.get("LOOM_PANE_ID")
     if pane_id:
         try:
             home = os.path.expanduser("~")
@@ -82,6 +83,25 @@ if session_id and (event == "Stop" or has_transcript_content(transcript)):
         except Exception:
             pass
     emit_osc("\x1b]9;loom-session;" + str(session_id) + "\x1b\\")
+
+# Stops sidecar: parallel transport for the `loom-stop` completion
+# signal. `emit_osc` above is a no-op when Codex detaches the hook
+# from the TTY, so the backend stops-poller reads
+# ~/.loom/stops/<pane_id> mtime and forwards new writes to the
+# frontend as `loom-stop-captured` events. Suppressed on
+# SessionStart so session boot does not trip a completion.
+if event == "Stop" and pane_id:
+    try:
+        home = os.path.expanduser("~")
+        stops_dir = os.path.join(home, ".loom", "stops")
+        os.makedirs(stops_dir, exist_ok=True)
+        stops_path = os.path.join(stops_dir, pane_id)
+        tmp_path = stops_path + ".tmp"
+        with open(tmp_path, "w") as f:
+            f.write("loom-stop\n")
+        os.replace(tmp_path, stops_path)
+    except Exception:
+        pass
 
 # SessionStart: session marker only, no stop.
 # rc=10 tells the shell to disarm the EXIT trap.
