@@ -108,7 +108,150 @@ const BUILTIN_LIGHT: Theme = {
   },
 };
 
-const BUILTIN_THEMES: readonly Theme[] = [BUILTIN_DARK, BUILTIN_LIGHT];
+// Cool blue-gray surfaces with a desaturated teal accent. Reads
+// "calm" — closer to a winter morning than the warmer Loom Dark.
+const BUILTIN_ATLANTIC_DARK: Theme = {
+  id: "builtin-atlantic-dark",
+  name: "Atlantic Dark",
+  appearance: "dark",
+  isBuiltin: true,
+  createdAt: 0,
+  tokens: {
+    ink0: "#0a0e12",
+    ink1: "#10151a",
+    ink2: "#161c23",
+    ink3: "#1e252e",
+    ink4: "#29323d",
+    rule: "#2a323d",
+    paper: "#d8e1ec",
+    muted: "#8b95a3",
+    faint: "#5a6371",
+    fade: "#3a414c",
+    amber: "#5fc4c0",
+    amberSoft: "#4ea8a4",
+    amberDeep: "#3a8a87",
+    coral: "#e78584",
+    mint: "#88c79c",
+  },
+};
+
+// Warm browns and a burnished copper accent. For when you want
+// something cozier than Loom Dark but still a true dark theme.
+const BUILTIN_FORGE_DARK: Theme = {
+  id: "builtin-forge-dark",
+  name: "Forge Dark",
+  appearance: "dark",
+  isBuiltin: true,
+  createdAt: 0,
+  tokens: {
+    ink0: "#0f0b08",
+    ink1: "#14100c",
+    ink2: "#1a1611",
+    ink3: "#211c16",
+    ink4: "#2b251d",
+    rule: "#2d271f",
+    paper: "#e8ddc8",
+    muted: "#a89c83",
+    faint: "#6c6452",
+    fade: "#443f33",
+    amber: "#d8884c",
+    amberSoft: "#b66e3a",
+    amberDeep: "#92562b",
+    coral: "#e0735e",
+    mint: "#94b870",
+  },
+};
+
+// Deep navy-black with a soft violet accent. Distinctly different
+// hue family from the others; works well at night.
+const BUILTIN_MIDNIGHT_VIOLET: Theme = {
+  id: "builtin-midnight-violet",
+  name: "Midnight Violet",
+  appearance: "dark",
+  isBuiltin: true,
+  createdAt: 0,
+  tokens: {
+    ink0: "#0a0a14",
+    ink1: "#10101c",
+    ink2: "#161624",
+    ink3: "#1d1d2e",
+    ink4: "#28283c",
+    rule: "#292940",
+    paper: "#dcd9e8",
+    muted: "#908ea5",
+    faint: "#5e5d73",
+    fade: "#3c3b4d",
+    amber: "#b690f5",
+    amberSoft: "#9676d8",
+    amberDeep: "#7459b8",
+    coral: "#f17a8a",
+    mint: "#88d8a4",
+  },
+};
+
+// Plum-tinted surfaces with a pastel rose accent. Softer overall
+// contrast than the other darks — easier on tired eyes.
+const BUILTIN_BERRY_CREAM: Theme = {
+  id: "builtin-berry-cream",
+  name: "Berry Cream",
+  appearance: "dark",
+  isBuiltin: true,
+  createdAt: 0,
+  tokens: {
+    ink0: "#14101a",
+    ink1: "#1a1521",
+    ink2: "#211c29",
+    ink3: "#292333",
+    ink4: "#342c40",
+    rule: "#322a3d",
+    paper: "#ecdfe4",
+    muted: "#b0a2ab",
+    faint: "#756a73",
+    fade: "#4a444c",
+    amber: "#f0a2bc",
+    amberSoft: "#d2849f",
+    amberDeep: "#ad6783",
+    coral: "#f08886",
+    mint: "#a8d9a8",
+  },
+};
+
+// Warm cream paper with a terracotta accent. Light counterpart to
+// Forge Dark; a softer alternative to the stark Loom Light.
+const BUILTIN_PARCHMENT_LIGHT: Theme = {
+  id: "builtin-parchment-light",
+  name: "Parchment Light",
+  appearance: "light",
+  isBuiltin: true,
+  createdAt: 0,
+  tokens: {
+    ink0: "#faf6ec",
+    ink1: "#f3eedf",
+    ink2: "#ebe4cf",
+    ink3: "#ddd3b8",
+    ink4: "#ccc09e",
+    rule: "#d8cdb3",
+    paper: "#2a2421",
+    muted: "#5a5048",
+    faint: "#847a6f",
+    fade: "#b0a597",
+    amber: "#b86040",
+    amberSoft: "#985030",
+    amberDeep: "#783e22",
+    coral: "#b34030",
+    mint: "#5a8a5e",
+  },
+};
+
+const BUILTIN_THEMES: readonly Theme[] = [
+  BUILTIN_DARK,
+  BUILTIN_LIGHT,
+  BUILTIN_ATLANTIC_DARK,
+  BUILTIN_FORGE_DARK,
+  BUILTIN_MIDNIGHT_VIOLET,
+  BUILTIN_BERRY_CREAM,
+  BUILTIN_PARCHMENT_LIGHT,
+];
 
 /// The order tokens are presented in the editor, grouped by purpose.
 /// Helper text is shown next to each row.
