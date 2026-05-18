@@ -1,7 +1,7 @@
 {
   "name": "@loom/desktop",
   "private": true,
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Loom desktop app — multi-pane terminal for orchestrating coding agents.",
   "license": "MIT",
   "author": "Lukas Baum <lukas@lukasbaum.dev>",
