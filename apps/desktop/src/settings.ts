@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from "react";
 import { ACTION_IDS, type ActionId, parseChord } from "./keybindings";
+import { SOUND_PRESET_IDS, type SoundPreset } from "./notificationSound";
 import { pushToastOnce } from "./toast";
 import { BUILTIN_DARK_ID, BUILTIN_LIGHT_ID } from "./themes";
 
@@ -34,6 +35,18 @@ export type Settings = {
   /// `keybindings.ts` and get filled in at read time via `mergeKeymap`.
   /// An empty array for an action means "unbound".
   keybindings: Partial<Record<ActionId, string[]>>;
+  /// Whether to play a sound when a pane finishes a turn (same gate as
+  /// the sidebar mint pulse — suppressed when the user is already
+  /// looking at the pane and scrolled to the bottom). Off by default.
+  notificationSoundEnabled: boolean;
+  /// Which preset to play. Built-ins are synthesized via Web Audio;
+  /// "custom" reads `notificationSoundCustomPath`.
+  notificationSoundPreset: SoundPreset | "custom";
+  /// Absolute path to a user-supplied audio file. Only consulted when
+  /// `notificationSoundPreset === "custom"`. null = no file picked.
+  notificationSoundCustomPath: string | null;
+  /// Master playback gain, 0–1. Applied to both synth and custom file.
+  notificationSoundVolume: number;
 };
 
 export const DEFAULTS: Settings = {
@@ -43,15 +56,21 @@ export const DEFAULTS: Settings = {
   activeThemeId: BUILTIN_DARK_ID,
   showClaudeUsage: true,
   keybindings: {},
+  notificationSoundEnabled: false,
+  notificationSoundPreset: "ding",
+  notificationSoundCustomPath: null,
+  notificationSoundVolume: 0.6,
 };
 
 const MIN: Partial<Record<keyof Settings, number>> = {
   terminalFontSize: 9,
   idleQuietMs: 200,
+  notificationSoundVolume: 0,
 };
 const MAX: Partial<Record<keyof Settings, number>> = {
   terminalFontSize: 28,
   idleQuietMs: 30_000,
+  notificationSoundVolume: 1,
 };
 
 let current: Settings = loadFromStorage();
@@ -86,6 +105,10 @@ function sanitizeKeybindings(
   return out;
 }
 
+// Preset ids accepted on disk. "custom" is valid alongside the synth
+// presets; anything else falls back to the default.
+const VALID_PRESETS = new Set<string>([...SOUND_PRESET_IDS, "custom"]);
+
 function mergeWithDefaults(partial: Partial<Settings>): Settings {
   const out = { ...DEFAULTS };
   for (const k of Object.keys(DEFAULTS) as (keyof Settings)[]) {
@@ -94,6 +117,20 @@ function mergeWithDefaults(partial: Partial<Settings>): Settings {
     if (k === "keybindings") {
       const cleaned = sanitizeKeybindings(v);
       if (cleaned) out.keybindings = cleaned;
+      continue;
+    }
+    // `notificationSoundCustomPath` is the only nullable field; accept
+    // a string path or an explicit null, reject anything else.
+    if (k === "notificationSoundCustomPath") {
+      if (v === null || (typeof v === "string" && v.length > 0)) {
+        out.notificationSoundCustomPath = v as string | null;
+      }
+      continue;
+    }
+    if (k === "notificationSoundPreset") {
+      if (typeof v === "string" && VALID_PRESETS.has(v)) {
+        out.notificationSoundPreset = v as Settings["notificationSoundPreset"];
+      }
       continue;
     }
     if (typeof v !== typeof DEFAULTS[k]) continue;

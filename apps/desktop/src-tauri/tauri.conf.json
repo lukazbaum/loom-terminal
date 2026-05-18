@@ -25,7 +25,11 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; frame-src 'self' http://localhost:* http://127.0.0.1:*; base-uri 'self'; form-action 'none'; object-src 'none'; frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'"
+      "csp": "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; media-src 'self' asset: http://asset.localhost; connect-src 'self' ipc: http://ipc.localhost http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; frame-src 'self' http://localhost:* http://127.0.0.1:*; base-uri 'self'; form-action 'none'; object-src 'none'; frame-ancestors 'none'; worker-src 'self'; manifest-src 'self'",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["**/*.wav", "**/*.mp3", "**/*.ogg", "**/*.flac"]
+      }
     }
   },
   "bundle": {

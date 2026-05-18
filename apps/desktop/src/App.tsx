@@ -20,6 +20,7 @@ import {
   saveSessionIdOverride,
   type SessionAgent,
 } from "./sessionPersist";
+import { playNotificationSound } from "./notificationSound";
 import { useSettings } from "./settings";
 import {
   Sidebar,
@@ -179,6 +180,13 @@ function App() {
   const [unread, setUnread] = useState<Map<string, Set<string>>>(
     () => new Map(),
   );
+  // Parallel ref mirroring `unread` so callbacks can read the current
+  // value synchronously. Needed by `markPaneUnread` to decide whether a
+  // pane completion is genuinely new (and thus whether to play the
+  // notification sound) without putting side effects inside a state
+  // updater. Each mutation site below writes to both `setUnread` and
+  // `unreadRef.current` to keep them aligned.
+  const unreadRef = useRef<Map<string, Set<string>>>(unread);
   // Sidebar only needs to know "is this workspace's tab unread?", so
   // derive a Set of ids it can `has()`. Memoized on the underlying
   // Map identity so unrelated state churn doesn't rebuild it.
@@ -427,15 +435,19 @@ function App() {
       // workspace, or scrolled up in this one reading scrollback, the
       // tab pulses so they don't miss that Claude finished.
       if (activeRef.current === wsId && wasAtBottom) return;
-      setUnread((prev) => {
-        const existing = prev.get(wsId);
-        if (existing?.has(paneId)) return prev;
-        const next = new Map(prev);
-        const nextSet = new Set(existing ?? []);
-        nextSet.add(paneId);
-        next.set(wsId, nextSet);
-        return next;
-      });
+      const existing = unreadRef.current.get(wsId);
+      if (existing?.has(paneId)) return;
+      const nextSet = new Set(existing ?? []);
+      nextSet.add(paneId);
+      const next = new Map(unreadRef.current);
+      next.set(wsId, nextSet);
+      unreadRef.current = next;
+      setUnread(next);
+      // Rides the same gate as the mint pulse above: we got past the
+      // active-and-at-bottom early-return AND this is a fresh pane
+      // completion (not a repeat). Sound is a no-op when disabled in
+      // settings — checked inside `playNotificationSound`.
+      playNotificationSound();
     },
     [],
   );
@@ -456,28 +468,23 @@ function App() {
   );
 
   const clearPaneUnread = useCallback((wsId: string, paneId: string) => {
-    setUnread((prev) => {
-      const existing = prev.get(wsId);
-      if (!existing?.has(paneId)) return prev;
-      const next = new Map(prev);
-      const nextSet = new Set(existing);
-      nextSet.delete(paneId);
-      if (nextSet.size === 0) {
-        next.delete(wsId);
-      } else {
-        next.set(wsId, nextSet);
-      }
-      return next;
-    });
+    const existing = unreadRef.current.get(wsId);
+    if (!existing?.has(paneId)) return;
+    const nextSet = new Set(existing);
+    nextSet.delete(paneId);
+    const next = new Map(unreadRef.current);
+    if (nextSet.size === 0) next.delete(wsId);
+    else next.set(wsId, nextSet);
+    unreadRef.current = next;
+    setUnread(next);
   }, []);
 
   const clearWorkspaceUnread = useCallback((wsId: string) => {
-    setUnread((prev) => {
-      if (!prev.has(wsId)) return prev;
-      const next = new Map(prev);
-      next.delete(wsId);
-      return next;
-    });
+    if (!unreadRef.current.has(wsId)) return;
+    const next = new Map(unreadRef.current);
+    next.delete(wsId);
+    unreadRef.current = next;
+    setUnread(next);
   }, []);
 
   /// Pane scrolled to the bottom — the user has caught up on whatever

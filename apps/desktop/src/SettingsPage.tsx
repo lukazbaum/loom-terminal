@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 
 import { KeybindingsEditor } from "./KeybindingsEditor";
+import {
+  previewSound,
+  SOUND_PRESET_IDS,
+  SOUND_PRESET_LABELS,
+  type SoundPreset,
+} from "./notificationSound";
 import { setSetting, useSettings } from "./settings";
 import { useActionChord } from "./useActionChord";
 import {
@@ -142,6 +149,13 @@ export function SettingsPage({
               }
             />
           </div>
+        </section>
+
+        <section className="mb-10">
+          <h2 className="mb-5 font-sans text-[11px] font-semibold uppercase tracking-[0.22em] text-faint">
+            Notifications
+          </h2>
+          <NotificationsSection />
         </section>
 
         <section className="mb-10">
@@ -509,4 +523,192 @@ function ThemeSwatchRow({
       ))}
     </div>
   );
+}
+
+function NotificationsSection() {
+  const settings = useSettings();
+  const enabled = settings.notificationSoundEnabled;
+  const preset = settings.notificationSoundPreset;
+  const customPath = settings.notificationSoundCustomPath;
+  const volume = settings.notificationSoundVolume;
+
+  const handlePreview = () => {
+    previewSound({ preset, customPath, volume });
+  };
+
+  const handlePickFile = async () => {
+    // Extensions match the assetProtocol scope in tauri.conf.json —
+    // keep them in sync. m4a/AAC playback is patchy on Linux WebKitGTK,
+    // so we omit it.
+    try {
+      const picked = await open({
+        multiple: false,
+        filters: [
+          {
+            name: "Audio",
+            extensions: ["wav", "mp3", "ogg", "flac"],
+          },
+        ],
+      });
+      if (typeof picked === "string" && picked.length > 0) {
+        setSetting("notificationSoundCustomPath", picked);
+        setSetting("notificationSoundPreset", "custom");
+      }
+    } catch (err) {
+      console.warn("[loom] custom-sound picker failed", err);
+    }
+  };
+
+  // We dim the dependent rows when sound is disabled so the section
+  // visually fades to "off", but everything stays clickable — the user
+  // may want to audition a preset before flipping the toggle on.
+  const dim = enabled ? "" : "opacity-50";
+
+  return (
+    <div className="border-t border-rule/40">
+      <SettingRow
+        label="Play sound when an agent finishes"
+        hint="Plays once each time a pane signals completion. Suppressed when you're already looking at the pane and scrolled to the bottom — the same gate as the sidebar pulse."
+        control={
+          <Toggle
+            checked={enabled}
+            onChange={(v) => setSetting("notificationSoundEnabled", v)}
+          />
+        }
+      />
+      <div className={dim}>
+        <SettingRow
+          label="Sound"
+          hint="Built-in presets are tiny synthesized tones. Choose Custom… to pick an audio file from disk."
+          control={
+            <div className="flex items-center gap-2">
+              <SoundPresetPicker
+                preset={preset}
+                onChange={(p) => setSetting("notificationSoundPreset", p)}
+                onPickCustom={handlePickFile}
+              />
+              <button
+                type="button"
+                onClick={handlePreview}
+                className="cursor-pointer border border-rule bg-transparent px-3 py-[5px] font-mono text-[10.5px] uppercase tracking-[0.16em] text-muted transition-colors duration-150 hover:border-paper hover:text-paper"
+                aria-label="Preview sound"
+              >
+                Preview
+              </button>
+            </div>
+          }
+        />
+        {preset === "custom" && (
+          <SettingRow
+            label="Custom file"
+            hint={
+              customPath
+                ? "If the file moves or is deleted, playback fails silently — re-pick to fix."
+                : "No file chosen yet. Pick one to enable custom playback."
+            }
+            control={
+              <div className="flex items-center gap-2">
+                <span
+                  title={customPath ?? undefined}
+                  className="max-w-[240px] truncate font-mono text-[11px] text-paper"
+                >
+                  {customPath ? fileBasename(customPath) : "—"}
+                </span>
+                <button
+                  type="button"
+                  onClick={handlePickFile}
+                  className="cursor-pointer border border-rule bg-transparent px-3 py-[5px] font-mono text-[10.5px] uppercase tracking-[0.16em] text-muted transition-colors duration-150 hover:border-paper hover:text-paper"
+                >
+                  Choose…
+                </button>
+                {customPath && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setSetting("notificationSoundCustomPath", null)
+                    }
+                    className="cursor-pointer border border-rule bg-transparent px-3 py-[5px] font-mono text-[10.5px] uppercase tracking-[0.16em] text-muted transition-colors duration-150 hover:border-paper hover:text-paper"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            }
+          />
+        )}
+        <SettingRow
+          label="Volume"
+          hint="Master gain applied to both built-in presets and custom files."
+          control={
+            <NumberStepper
+              value={volume}
+              min={0}
+              max={1}
+              step={0.1}
+              onChange={(v) => setSetting("notificationSoundVolume", v)}
+              format={(v) => `${Math.round(v * 100)}%`}
+            />
+          }
+        />
+      </div>
+    </div>
+  );
+}
+
+function SoundPresetPicker({
+  preset,
+  onChange,
+  onPickCustom,
+}: {
+  preset: SoundPreset | "custom";
+  onChange: (p: SoundPreset | "custom") => void;
+  onPickCustom: () => void;
+}) {
+  return (
+    <div className="inline-flex items-stretch border border-rule bg-ink-1/60">
+      {SOUND_PRESET_IDS.map((p) => {
+        const active = preset === p;
+        return (
+          <button
+            key={p}
+            type="button"
+            onClick={() => onChange(p)}
+            className={`cursor-pointer border-l border-rule/60 px-2.5 py-1 font-mono text-[10.5px] uppercase tracking-[0.14em] transition-colors duration-100 first:border-l-0 ${
+              active
+                ? "bg-amber/[0.10] text-paper"
+                : "text-muted hover:bg-ink-2 hover:text-paper"
+            }`}
+          >
+            {SOUND_PRESET_LABELS[p]}
+          </button>
+        );
+      })}
+      <button
+        type="button"
+        // Selecting Custom for the first time opens the file dialog
+        // immediately, so the picker doesn't land on an empty "custom
+        // but no file" state. If Custom is already active, re-clicking
+        // is a no-op (use the "Choose…" button in the row below to
+        // re-pick).
+        onClick={() => {
+          if (preset !== "custom") onPickCustom();
+        }}
+        className={`cursor-pointer border-l border-rule/60 px-2.5 py-1 font-mono text-[10.5px] uppercase tracking-[0.14em] transition-colors duration-100 ${
+          preset === "custom"
+            ? "bg-amber/[0.10] text-paper"
+            : "text-muted hover:bg-ink-2 hover:text-paper"
+        }`}
+      >
+        Custom…
+      </button>
+    </div>
+  );
+}
+
+// Pull the trailing path segment off an absolute path. Handles both
+// POSIX and Windows separators since custom-sound paths come straight
+// from the OS file picker.
+function fileBasename(path: string): string {
+  const i = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return i >= 0 ? path.slice(i + 1) : path;
 }
