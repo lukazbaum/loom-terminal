@@ -135,30 +135,60 @@ const BUILTIN_ATLANTIC_DARK: Theme = {
   },
 };
 
-// Warm browns and a burnished copper accent. For when you want
-// something cozier than Loom Dark but still a true dark theme.
-const BUILTIN_FORGE_DARK: Theme = {
-  id: "builtin-forge-dark",
-  name: "Forge Dark",
+// Cool dark surfaces with a clean cobalt-blue accent. Distinct from
+// Atlantic Dark's teal/cyan — this one reads as unambiguously blue,
+// where Atlantic leans aqua.
+const BUILTIN_COBALT_DARK: Theme = {
+  id: "builtin-cobalt-dark",
+  name: "Cobalt Dark",
   appearance: "dark",
   isBuiltin: true,
   createdAt: 0,
   tokens: {
-    ink0: "#0f0b08",
-    ink1: "#14100c",
-    ink2: "#1a1611",
-    ink3: "#211c16",
-    ink4: "#2b251d",
-    rule: "#2d271f",
-    paper: "#e8ddc8",
-    muted: "#a89c83",
-    faint: "#6c6452",
-    fade: "#443f33",
-    amber: "#d8884c",
-    amberSoft: "#b66e3a",
-    amberDeep: "#92562b",
-    coral: "#e0735e",
-    mint: "#94b870",
+    ink0: "#0a0c14",
+    ink1: "#0f1219",
+    ink2: "#151920",
+    ink3: "#1c2129",
+    ink4: "#262d38",
+    rule: "#272d39",
+    paper: "#d6dde9",
+    muted: "#8b94a3",
+    faint: "#5a6371",
+    fade: "#3a414c",
+    amber: "#6aa3ec",
+    amberSoft: "#5588d0",
+    amberDeep: "#406eaf",
+    coral: "#e58572",
+    mint: "#88c79c",
+  },
+};
+
+// Cool near-black surfaces with a muted sage accent. The only theme
+// in the built-in set that puts green in the accent slot; the mint
+// "success" token shifts toward yellow-green so the two stay visually
+// distinct from each other.
+const BUILTIN_MOSS_DARK: Theme = {
+  id: "builtin-moss-dark",
+  name: "Moss Dark",
+  appearance: "dark",
+  isBuiltin: true,
+  createdAt: 0,
+  tokens: {
+    ink0: "#0a0e0c",
+    ink1: "#101512",
+    ink2: "#161c18",
+    ink3: "#1d2520",
+    ink4: "#28312b",
+    rule: "#283129",
+    paper: "#d9e2dc",
+    muted: "#8e9a92",
+    faint: "#5b6660",
+    fade: "#3a4540",
+    amber: "#8fc594",
+    amberSoft: "#6fa476",
+    amberDeep: "#4f8456",
+    coral: "#e58572",
+    mint: "#c5d870",
   },
 };
 
@@ -247,7 +277,8 @@ const BUILTIN_THEMES: readonly Theme[] = [
   BUILTIN_DARK,
   BUILTIN_LIGHT,
   BUILTIN_ATLANTIC_DARK,
-  BUILTIN_FORGE_DARK,
+  BUILTIN_COBALT_DARK,
+  BUILTIN_MOSS_DARK,
   BUILTIN_MIDNIGHT_VIOLET,
   BUILTIN_BERRY_CREAM,
   BUILTIN_PARCHMENT_LIGHT,
