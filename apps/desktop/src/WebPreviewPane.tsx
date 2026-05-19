@@ -63,6 +63,11 @@ export function WebPreviewPane({ paneId: _paneId, url: initialUrl }: Props) {
   // through that path. A `javascript:` or `data:` URL would otherwise
   // execute inside the iframe's sandbox — bounded by the sandbox
   // attrs above, but still a code-smell CodeQL flags as XSS.
+  //
+  // The returned string is rebuilt from the parsed `URL` object's
+  // own fields rather than re-interpolating the tainted `current`,
+  // so static-analysis taint tracking sees the user-typed string
+  // drop out at the sanitizer boundary.
   const cacheBustedSrc = (() => {
     let parsed: URL;
     try {
@@ -73,8 +78,8 @@ export function WebPreviewPane({ paneId: _paneId, url: initialUrl }: Props) {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return "about:blank";
     }
-    const sep = current.includes("?") ? "&" : "?";
-    return `${current}${sep}_loomReload=${reloadNonce}`;
+    parsed.searchParams.set("_loomReload", String(reloadNonce));
+    return parsed.toString();
   })();
 
   const navigate = (newUrl: string) => {
