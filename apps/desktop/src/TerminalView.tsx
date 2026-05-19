@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo, useRef, type MutableRefObject } from "react";
 import { registerPaneWriter } from "./paneWriters";
 import type { IDisposable, Terminal } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
+import type { WebLinksAddon as WebLinksAddonType } from "@xterm/addon-web-links";
 import type { WebglAddon as WebglAddonType } from "@xterm/addon-webgl";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
@@ -243,6 +244,10 @@ type TermState = {
   /// Loaded asynchronously; cleared in the addon's `onContextLoss`
   /// fallback. Held here so cleanup can dispose it.
   webgl: WebglAddonType | null;
+  /// Loaded asynchronously alongside WebGL. Held here so cleanup can
+  /// dispose it alongside the other addons before the Terminal goes
+  /// back to the pool.
+  webLinks: WebLinksAddonType | null;
 };
 
 function makeTermState(visible: boolean, expectsStopHook: boolean): TermState {
@@ -264,7 +269,37 @@ function makeTermState(visible: boolean, expectsStopHook: boolean): TermState {
     wasAtBottomLast: true,
     suppressReachedBottom: false,
     webgl: null,
+    webLinks: null,
   };
+}
+
+/// Lazy-load the web-links addon so URLs printed by agents become
+/// clickable. xterm's default activator is `window.open(url, '_blank')`
+/// which fails inside Tauri's webview (CSP blocks remote navigation),
+/// so we route through `plugin:opener|open_url` to hand the URL to the
+/// OS — same pattern used by PortsPanel / AppHeader / WebPreviewPane.
+/// Records the addon on `state.webLinks` so cleanup can dispose it.
+function setupWebLinks(term: Terminal, state: TermState): void {
+  import("@xterm/addon-web-links")
+    .then(({ WebLinksAddon }) => {
+      if (state.disposed) return;
+      try {
+        const addon = new WebLinksAddon((_event, uri) => {
+          // Capability allowlists http(s); other schemes (file:,
+          // mailto:) reject — silenced so they don't flood the console.
+          invoke("plugin:opener|open_url", { url: uri }).catch(() => {});
+        });
+        term.loadAddon(addon);
+        state.webLinks = addon;
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("[loom] xterm web-links load failed", e);
+      }
+    })
+    .catch((e) => {
+      // eslint-disable-next-line no-console
+      console.warn("[loom] xterm web-links chunk failed to load", e);
+    });
 }
 
 /// Lazy-load the WebGL addon so its ~30 KB raw don't ship in the main
@@ -990,6 +1025,7 @@ export const TerminalView = memo(function TerminalView({
     const decoder = new TextDecoder("utf-8", { fatal: false });
 
     setupWebgl(term, state);
+    setupWebLinks(term, state);
     const { armIdleTimer } = setupCompletionSignals(term, state, {
       paneId,
       onCompletionRef,
@@ -1187,6 +1223,7 @@ export const TerminalView = memo(function TerminalView({
       // invisible — no user-facing artifacts from the delay.
       const deadTerm = term;
       const deadWebgl = state.webgl;
+      const deadWebLinks = state.webLinks;
       const deadFit = fit;
       scheduleDispose(() => {
         // Addons are bound to the renderer that `term.open(host)`
@@ -1195,6 +1232,11 @@ export const TerminalView = memo(function TerminalView({
         // the next mount that picks up this instance.
         try {
           deadWebgl?.dispose();
+        } catch {
+          // ignore
+        }
+        try {
+          deadWebLinks?.dispose();
         } catch {
           // ignore
         }
