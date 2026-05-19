@@ -56,7 +56,23 @@ export function WebPreviewPane({ paneId: _paneId, url: initialUrl }: Props) {
     setIsLoading(true);
   }, [current, reloadNonce]);
 
+  // Defense-in-depth scheme gate on whatever lands in the iframe `src`.
+  // `onSubmitUrl` already prefixes `http://` for naked hostnames, but
+  // `current` can also flow from `initialUrl` (persisted from a prior
+  // session) and the back/forward history, neither of which goes
+  // through that path. A `javascript:` or `data:` URL would otherwise
+  // execute inside the iframe's sandbox — bounded by the sandbox
+  // attrs above, but still a code-smell CodeQL flags as XSS.
   const cacheBustedSrc = (() => {
+    let parsed: URL;
+    try {
+      parsed = new URL(current);
+    } catch {
+      return "about:blank";
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return "about:blank";
+    }
     const sep = current.includes("?") ? "&" : "?";
     return `${current}${sep}_loomReload=${reloadNonce}`;
   })();

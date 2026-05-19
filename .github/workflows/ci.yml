@@ -10,6 +10,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# All three jobs (rust / audit / frontend) only check out the repo and
+# run read-only tooling — no comments, no commits, no artifact uploads.
+# Drop GITHUB_TOKEN to the minimum scope so a compromised action in the
+# dependency chain can't escalate. Per-job overrides can be added later
+# if a job ever needs to write (e.g. coverage upload, PR comment).
+permissions:
+  contents: read
+
 jobs:
   rust:
     # Matrix: Linux is the cheapest runner so the bulk of checks live
