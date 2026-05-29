@@ -46,7 +46,7 @@
     "check": "bun run check:fe && bun run check:rs"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.15"
+    "@biomejs/biome": "2.4.16"
   },
   "trustedDependencies": []
 }
