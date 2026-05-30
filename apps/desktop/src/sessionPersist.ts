@@ -44,10 +44,26 @@ const SELECTION_KEY = "loom.session.selection.v1";
 /// hundred bytes per pane and a fresh capture just overwrites in place).
 const OVERRIDE_KEY = "loom.session.idOverrides.v1";
 
+/// Stable id for the tab that pre-tabs snapshots migrate into. Constant
+/// (not random) so the migration is idempotent — re-running `loadSession`
+/// never spawns a second default tab. New tabs created at runtime use a
+/// random `tab_<uuid>` id instead.
+export const DEFAULT_TAB_ID = "tab_default";
+
 type PersistedSelection = {
   v: 1;
   activeWorkspaceId?: string;
   activePaneByWs?: Record<string, string>;
+  /// Id of the sidebar tab the user last had open.
+  activeTabId?: string;
+  /// Per-tab memory of the last-active workspace, so switching back to a
+  /// tab returns you to where you were instead of its last workspace.
+  activeWsByTab?: Record<string, string>;
+};
+
+export type PersistedTab = {
+  id: string;
+  name?: string;
 };
 
 /// Which agent captured `sessionId`. We can't infer this from the
@@ -95,6 +111,9 @@ type PersistedWorkspace = {
   id: string;
   name?: string;
   path: string;
+  /// Sidebar tab this workspace lives under. Absent on pre-tabs
+  /// snapshots — `loadSession` assigns the default tab id on load.
+  tabId?: string;
   panes: PersistedPane[];
   /// User-pinned pane ids. Pinned panes can't be closed without
   /// unpinning first — used as a soft guard for critical panes.
@@ -113,9 +132,19 @@ export type PersistedSession = {
   workspaces: PersistedWorkspace[];
   activeWorkspaceId?: string;
   activePaneByWs?: Record<string, string>;
+  /// Sidebar tabs, in display order. Always at least one after a load
+  /// (the loader synthesizes a default tab for pre-tabs snapshots).
+  tabs: PersistedTab[];
+  activeTabId?: string;
+  activeWsByTab?: Record<string, string>;
 };
 
-const EMPTY: PersistedSession = { v: 1, workspaces: [] };
+const EMPTY: PersistedSession = {
+  v: 1,
+  workspaces: [],
+  tabs: [{ id: DEFAULT_TAB_ID }],
+  activeTabId: DEFAULT_TAB_ID,
+};
 
 /// Validate one raw entry from a persisted-pane array. Returns the
 /// well-typed pane or `null` when the input doesn't even have an id —
@@ -172,10 +201,43 @@ function loadSelection(): PersistedSelection | null {
         !Array.isArray(parsed.activePaneByWs)
           ? (parsed.activePaneByWs as Record<string, string>)
           : undefined,
+      activeTabId:
+        typeof parsed.activeTabId === "string" ? parsed.activeTabId : undefined,
+      activeWsByTab:
+        parsed.activeWsByTab &&
+        typeof parsed.activeWsByTab === "object" &&
+        !Array.isArray(parsed.activeWsByTab)
+          ? (parsed.activeWsByTab as Record<string, string>)
+          : undefined,
     };
   } catch {
     return null;
   }
+}
+
+/// Parse + repair the persisted tab list. Drops malformed entries and
+/// guarantees at least one tab so the app always has a place to put
+/// workspaces. Pre-tabs snapshots (no `tabs` field) yield the single
+/// default tab, which the caller then assigns every workspace to.
+function parseTabs(raw: unknown): PersistedTab[] {
+  const tabs: PersistedTab[] = [];
+  if (Array.isArray(raw)) {
+    for (const t of raw) {
+      if (
+        t &&
+        typeof t === "object" &&
+        typeof (t as PersistedTab).id === "string"
+      ) {
+        const tab = t as PersistedTab;
+        tabs.push({
+          id: tab.id,
+          name: typeof tab.name === "string" ? tab.name : undefined,
+        });
+      }
+    }
+  }
+  if (tabs.length === 0) tabs.push({ id: DEFAULT_TAB_ID });
+  return tabs;
 }
 
 /// Load saved session from localStorage. Returns EMPTY on missing /
@@ -230,6 +292,7 @@ export function loadSession(): PersistedSession {
         id: w.id,
         name: typeof w.name === "string" ? w.name : undefined,
         path: w.path,
+        tabId: typeof w.tabId === "string" ? w.tabId : undefined,
         panes,
         pinnedPaneIds: Array.isArray(w.pinnedPaneIds)
           ? w.pinnedPaneIds.filter(
@@ -282,13 +345,39 @@ export function loadSession(): PersistedSession {
         };
       }
     }
+    // ── Tabs: parse, then repair membership ───────────────────────────
+    // Migration: a pre-tabs snapshot has no `tabs` field, so parseTabs
+    // returns the single default tab and every workspace (whose tabId is
+    // undefined) gets pinned to it below. Repair: any workspace pointing
+    // at a tab that no longer exists is rehomed to the first tab so it
+    // can never become unreachable.
+    const tabs = parseTabs(parsed.tabs);
+    const tabIds = new Set(tabs.map((t) => t.id));
+    for (const w of workspaces) {
+      if (!w.tabId || !tabIds.has(w.tabId)) {
+        w.tabId = tabs[0]!.id;
+      }
+    }
+
     // Selection lives in its own key (faster pane-click writes), but for
     // backwards compat we also accept selection fields embedded in the v1
     // blob — those win only if the dedicated selection key is missing.
     const selection = loadSelection();
+
+    const candidateActiveTab =
+      selection?.activeTabId ??
+      (typeof parsed.activeTabId === "string" ? parsed.activeTabId : undefined);
+    const activeTabId =
+      candidateActiveTab && tabIds.has(candidateActiveTab)
+        ? candidateActiveTab
+        : tabs[0]!.id;
+
     return {
       v: 1,
       workspaces,
+      tabs,
+      activeTabId,
+      activeWsByTab: selection?.activeWsByTab,
       activeWorkspaceId:
         selection?.activeWorkspaceId ??
         (typeof parsed.activeWorkspaceId === "string"
@@ -310,10 +399,14 @@ export function loadSession(): PersistedSession {
 export function saveSession(state: PersistedSession): void {
   saveSessionShape(state.workspaces, {
     activeWorkspaceId: state.activeWorkspaceId,
+    tabs: state.tabs,
+    activeTabId: state.activeTabId,
   });
   saveSessionSelection({
     activeWorkspaceId: state.activeWorkspaceId,
     activePaneByWs: state.activePaneByWs,
+    activeTabId: state.activeTabId,
+    activeWsByTab: state.activeWsByTab,
   });
 }
 
@@ -323,12 +416,18 @@ export function saveSession(state: PersistedSession): void {
 /// it's both small and tied to which workspace's session ids matter.
 export function saveSessionShape(
   workspaces: PersistedWorkspace[],
-  extra: { activeWorkspaceId?: string } = {},
+  extra: {
+    activeWorkspaceId?: string;
+    tabs?: PersistedTab[];
+    activeTabId?: string;
+  } = {},
 ): void {
   const payload = {
     v: 1,
     workspaces,
     activeWorkspaceId: extra.activeWorkspaceId,
+    tabs: extra.tabs,
+    activeTabId: extra.activeTabId,
   };
   try {
     localStorage.setItem(KEY, JSON.stringify(payload));
@@ -464,6 +563,8 @@ export function sanitizePaneAgent(
 export function saveSessionSelection(selection: {
   activeWorkspaceId?: string;
   activePaneByWs?: Record<string, string>;
+  activeTabId?: string;
+  activeWsByTab?: Record<string, string>;
 }): void {
   try {
     localStorage.setItem(SELECTION_KEY, JSON.stringify({ v: 1, ...selection }));

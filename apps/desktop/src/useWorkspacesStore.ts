@@ -1,5 +1,6 @@
 import { useReducer } from "react";
 
+import { DEFAULT_TAB_ID } from "./sessionPersist";
 import type { Pane, Session } from "./types";
 
 /// Discriminated-union of every shape-mutation the workspaces array
@@ -150,6 +151,42 @@ export function workspacesReducer(
     case "replace":
       return action.next;
   }
+}
+
+/// Reorder a workspace *within its tab*. `from` / `to` index the tab's
+/// filtered member list (the order shown in the sidebar), NOT the global
+/// `workspaces` array. Other tabs' workspaces keep their exact global
+/// slots; only this tab's members are permuted among the positions they
+/// already occupy, so the flat array stays valid for `MainPanes` (which
+/// renders every tab's workspaces) without any contiguity invariant.
+///
+/// `to` follows the drag-drop handler's convention: the insertion index
+/// in the pre-removal member list (0..members.length). No-ops (drop onto
+/// self / adjacent) return the input untouched so the caller can dispatch
+/// unconditionally and React skips the commit.
+export function reorderWorkspaceInTab(
+  state: Session[],
+  tabId: string,
+  from: number,
+  to: number,
+): Session[] {
+  const slots: number[] = [];
+  state.forEach((w, i) => {
+    if ((w.tabId ?? DEFAULT_TAB_ID) === tabId) slots.push(i);
+  });
+  if (from < 0 || from >= slots.length) return state;
+  if (to < 0 || to > slots.length) return state;
+  if (from === to || from === to - 1) return state;
+  const members = slots.map((i) => state[i]!);
+  const item = members.splice(from, 1)[0];
+  if (!item) return state;
+  const adjusted = from < to ? to - 1 : to;
+  members.splice(adjusted, 0, item);
+  const next = state.slice();
+  slots.forEach((globalIdx, k) => {
+    next[globalIdx] = members[k]!;
+  });
+  return next;
 }
 
 /// Thin hook around `useReducer`. Exposed as a hook (rather than just a

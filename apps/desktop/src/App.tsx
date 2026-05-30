@@ -6,6 +6,7 @@ import { AddShellsPrompt } from "./AddShellsPrompt";
 import { getPaneWriter, shellQuotePath } from "./paneWriters";
 import { AppHeader } from "./AppHeader";
 import { ConfirmCloseModal } from "./ConfirmCloseModal";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { shortenHome } from "./format";
 import { KeyboardHelpOverlay } from "./KeyboardHelpOverlay";
 import { mergeKeymap } from "./keybindings";
@@ -15,6 +16,7 @@ import { PortsPanel } from "./PortsPanel";
 import { usePresets } from "./presets";
 import { rememberRecentCommands } from "./recentCommands";
 import {
+  DEFAULT_TAB_ID,
   isSessionAgent,
   loadSession,
   saveSessionIdOverride,
@@ -36,10 +38,14 @@ import { useAppShortcuts } from "./useAppShortcuts";
 import { useLayoutHistory } from "./useLayoutHistory";
 import { useSessionPersistence } from "./useSessionPersistence";
 import { useTauriEvent } from "./useTauriEvent";
-import { useWorkspacesStore } from "./useWorkspacesStore";
+import {
+  reorderWorkspaceInTab,
+  useWorkspacesStore,
+} from "./useWorkspacesStore";
 import type { LaunchInput } from "./Welcome";
 import { makePaneId, workspaceLabel } from "./WorkspaceTab";
-import type { Pane, Session } from "./types";
+import { tabLabel } from "./TabSwitcher";
+import type { Pane, Session, WorkspaceTabMeta } from "./types";
 import "./App.css";
 
 type View = { kind: "workspace"; id: string } | { kind: "new" };
@@ -83,6 +89,7 @@ function App() {
       id: w.id,
       path: w.path,
       name: w.name,
+      tabId: w.tabId,
       pinnedPaneIds: w.pinnedPaneIds,
       gridCols: w.gridCols,
       gridRows: w.gridRows,
@@ -115,6 +122,32 @@ function App() {
   // dep and rebuilding on every shape edit.
   const workspacesRef = useRef(workspaces);
   workspacesRef.current = workspaces;
+
+  // ── Sidebar tabs ("pages") ─────────────────────────────────────────
+  // Each tab owns its own workspace list — workspaces carry a `tabId` and
+  // the sidebar shows only the active tab's. The flat `workspaces` array
+  // stays the union of every tab so MainPanes keeps all terminals mounted
+  // and background-tab agents keep running across tab switches.
+  const [tabs, setTabs] = useState<WorkspaceTabMeta[]>(persistedSession.tabs);
+  const initialActiveTabId =
+    persistedSession.activeTabId &&
+    persistedSession.tabs.some((t) => t.id === persistedSession.activeTabId)
+      ? persistedSession.activeTabId
+      : (persistedSession.tabs[0]?.id ?? DEFAULT_TAB_ID);
+  const [activeTabId, setActiveTabId] = useState<string>(initialActiveTabId);
+  const activeTabIdRef = useRef(activeTabId);
+  activeTabIdRef.current = activeTabId;
+  // Mirror tabs into a ref so stable callbacks (delete / request-delete)
+  // read the latest list without listing it as a dependency.
+  const tabsRef = useRef(tabs);
+  tabsRef.current = tabs;
+  // Per-tab memory of the last-active workspace, so switching back to a
+  // tab restores where you were instead of its last workspace.
+  const [activeWsByTab, setActiveWsByTab] = useState<Record<string, string>>(
+    persistedSession.activeWsByTab ?? {},
+  );
+  const [tabToDelete, setTabToDelete] = useState<WorkspaceTabMeta | null>(null);
+
   const [workspaceMenu, setWorkspaceMenu] = useState<{
     id: string;
     x: number;
@@ -154,12 +187,17 @@ function App() {
     [],
   );
   const [view, setView] = useState<View>(() => {
-    const ws = persistedSession.workspaces;
-    const last = ws[ws.length - 1];
+    // Land inside the active tab only — its remembered (or last) workspace.
+    const members = persistedSession.workspaces.filter(
+      (w) => (w.tabId ?? DEFAULT_TAB_ID) === initialActiveTabId,
+    );
+    const last = members[members.length - 1];
     if (!last) return { kind: "new" };
-    const wantedId = persistedSession.activeWorkspaceId;
+    const wantedId =
+      persistedSession.activeWsByTab?.[initialActiveTabId] ??
+      persistedSession.activeWorkspaceId;
     const found =
-      wantedId && ws.some((w) => w.id === wantedId) ? wantedId : last.id;
+      wantedId && members.some((w) => w.id === wantedId) ? wantedId : last.id;
     return { kind: "workspace", id: found };
   });
   const [collapsed, setCollapsed] = useState<boolean>(
@@ -411,6 +449,9 @@ function App() {
     workspaces,
     activeWorkspaceId: view.kind === "workspace" ? view.id : undefined,
     activePaneByWs,
+    tabs,
+    activeTabId,
+    activeWsByTab,
   });
   const activeWorkspaceId = view.kind === "workspace" ? view.id : null;
   // activeRef tracks the *intended* active workspace. Updated
@@ -423,6 +464,17 @@ function App() {
   activeRef.current = activeWorkspaceId;
   const setActiveView = useCallback((next: View) => {
     activeRef.current = next.kind === "workspace" ? next.id : null;
+    // Remember the active workspace for its tab so switching tabs returns
+    // here later. Keyed by the workspace's own tab (not the active tab) so
+    // it stays correct even if state is mid-transition.
+    if (next.kind === "workspace") {
+      const tid =
+        workspacesRef.current.find((w) => w.id === next.id)?.tabId ??
+        activeTabIdRef.current;
+      setActiveWsByTab((prev) =>
+        prev[tid] === next.id ? prev : { ...prev, [tid]: next.id },
+      );
+    }
     setView(next);
   }, []);
   const { presets, createPreset, updatePreset, deletePreset } = usePresets();
@@ -520,6 +572,153 @@ function App() {
     setCloseTargetId(id);
   }, []);
 
+  // ── Tab actions ────────────────────────────────────────────────────
+  /// Switch to a tab, landing on its remembered (or last) workspace. An
+  /// empty tab drops to the new-workspace view. Background tabs' panes
+  /// stay mounted, so their agents keep running.
+  const switchTab = useCallback(
+    (tabId: string) => {
+      if (tabId === activeTabIdRef.current) return;
+      setActiveTabId(tabId);
+      const members = workspacesRef.current.filter(
+        (w) => (w.tabId ?? DEFAULT_TAB_ID) === tabId,
+      );
+      const remembered = activeWsByTab[tabId];
+      const target =
+        remembered && members.some((w) => w.id === remembered)
+          ? remembered
+          : members.length > 0
+            ? members[members.length - 1]!.id
+            : null;
+      if (target) activateWorkspace(target);
+      else setActiveView({ kind: "new" });
+    },
+    [activeWsByTab, activateWorkspace, setActiveView],
+  );
+
+  const addTab = useCallback(() => {
+    const newTab: WorkspaceTabMeta = { id: `tab_${crypto.randomUUID()}` };
+    setTabs((prev) => [...prev, newTab]);
+    setActiveTabId(newTab.id);
+    // A fresh tab has no workspaces — land on the new-workspace view.
+    setActiveView({ kind: "new" });
+  }, [setActiveView]);
+
+  const renameTab = useCallback((id: string, raw: string) => {
+    const trimmed = raw.trim();
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.id === id
+          ? { ...t, name: trimmed.length > 0 ? trimmed : undefined }
+          : t,
+      ),
+    );
+  }, []);
+
+  /// Delete a tab and tear down every workspace it owns. Always leaves at
+  /// least one tab; when the active tab is deleted, hands focus to a
+  /// neighbor. Not snapshotted into layout-history undo — undo restores
+  /// the workspaces array but not the tab list, which would orphan them.
+  const performDeleteTab = useCallback(
+    (id: string) => {
+      const members = workspacesRef.current.filter(
+        (w) => (w.tabId ?? DEFAULT_TAB_ID) === id,
+      );
+      const memberIds = new Set(members.map((w) => w.id));
+
+      for (const w of members) {
+        invoke("unregister_workspace", { workspaceId: w.id }).catch((err) => {
+          // eslint-disable-next-line no-console
+          console.warn("[loom] unregister_workspace failed", err);
+        });
+      }
+
+      if (memberIds.size > 0) {
+        dispatchWorkspaces({
+          type: "replace",
+          next: workspacesRef.current.filter((w) => !memberIds.has(w.id)),
+        });
+        // Drop closed workspaces' active-pane + unread bookkeeping.
+        setActivePaneByWs((prev) => {
+          let changed = false;
+          const next: Record<string, string> = {};
+          for (const [k, v] of Object.entries(prev)) {
+            if (memberIds.has(k)) changed = true;
+            else next[k] = v;
+          }
+          return changed ? next : prev;
+        });
+        let unreadChanged = false;
+        const nextUnread = new Map(unreadRef.current);
+        for (const wsId of memberIds) {
+          if (nextUnread.delete(wsId)) unreadChanged = true;
+        }
+        if (unreadChanged) {
+          unreadRef.current = nextUnread;
+          setUnread(nextUnread);
+        }
+      }
+
+      // Remove the tab, guaranteeing at least one always remains.
+      const remainingTabs = tabsRef.current.filter((t) => t.id !== id);
+      const nextTabs: WorkspaceTabMeta[] =
+        remainingTabs.length > 0
+          ? remainingTabs
+          : [{ id: `tab_${crypto.randomUUID()}` }];
+      setTabs(nextTabs);
+      setActiveWsByTab((prev) => {
+        if (!(id in prev)) return prev;
+        const { [id]: _removed, ...rest } = prev;
+        return rest;
+      });
+
+      // If the deleted tab was active, move to a neighbor and land on its
+      // remembered / last workspace (or the new-workspace view).
+      if (id === activeTabIdRef.current) {
+        const deletedIdx = tabsRef.current.findIndex((t) => t.id === id);
+        const neighbor =
+          nextTabs[Math.min(Math.max(deletedIdx, 0), nextTabs.length - 1)]!;
+        setActiveTabId(neighbor.id);
+        const survivors = workspacesRef.current.filter(
+          (w) =>
+            !memberIds.has(w.id) && (w.tabId ?? DEFAULT_TAB_ID) === neighbor.id,
+        );
+        const remembered = activeWsByTab[neighbor.id];
+        const target =
+          remembered && survivors.some((w) => w.id === remembered)
+            ? remembered
+            : survivors.length > 0
+              ? survivors[survivors.length - 1]!.id
+              : null;
+        if (target) activateWorkspace(target);
+        else setActiveView({ kind: "new" });
+      }
+    },
+    [dispatchWorkspaces, activeWsByTab, activateWorkspace, setActiveView],
+  );
+
+  /// Confirm only when the tab actually owns workspaces — an empty tab
+  /// has nothing to lose, so it closes immediately.
+  const requestDeleteTab = useCallback(
+    (id: string) => {
+      const hasWorkspaces = workspacesRef.current.some(
+        (w) => (w.tabId ?? DEFAULT_TAB_ID) === id,
+      );
+      if (hasWorkspaces) {
+        setTabToDelete(tabsRef.current.find((t) => t.id === id) ?? null);
+      } else {
+        performDeleteTab(id);
+      }
+    },
+    [performDeleteTab],
+  );
+
+  const confirmDeleteTab = useCallback(() => {
+    if (!tabToDelete) return;
+    performDeleteTab(tabToDelete.id);
+    setTabToDelete(null);
+  }, [tabToDelete, performDeleteTab]);
+
   /// Gutter drop indicator — when the user drags over the empty space
   /// above the first tab or below the last tab, per-tab handlers can't
   /// fire (cursor isn't on any tab). The list container handles those
@@ -537,7 +736,18 @@ function App() {
   /// save call is needed here.
   const moveWorkspace = useCallback(
     (from: number, to: number) => {
-      dispatchWorkspaces({ type: "move", from, to });
+      // `from` / `to` index the active tab's filtered list (what the
+      // sidebar renders), so reorder within that tab only — other tabs'
+      // workspaces keep their global slots.
+      dispatchWorkspaces({
+        type: "replace",
+        next: reorderWorkspaceInTab(
+          workspacesRef.current,
+          activeTabIdRef.current,
+          from,
+          to,
+        ),
+      });
     },
     [dispatchWorkspaces],
   );
@@ -630,6 +840,12 @@ function App() {
       dispatchWorkspaces({ type: "addPreviewPane", wsId, url, pane: newPane });
       setActivePaneByWs((p) => ({ ...p, [wsId]: newPane.id }));
     }
+    // The previewed workspace may live on a background tab (a dev server
+    // started by another tab's agent keeps running). Follow it with the
+    // active tab so the sidebar list + tab strip stay in sync with the
+    // workspace we're about to show.
+    const targetTabId = ws.tabId ?? DEFAULT_TAB_ID;
+    if (targetTabId !== activeTabIdRef.current) setActiveTabId(targetTabId);
     setActiveView({ kind: "workspace", id: wsId });
   };
 
@@ -774,6 +990,7 @@ function App() {
       id,
       path: input.path,
       name: input.name,
+      tabId: activeTabIdRef.current,
       panes,
     };
     dispatchWorkspaces({ type: "add", workspace: next });
@@ -822,8 +1039,14 @@ function App() {
     // removed (would surface as a one-frame "workspace not found"
     // flash on the next render).
     if (view.kind === "workspace" && view.id === id) {
-      const filtered = workspacesRef.current.filter((w) => w.id !== id);
-      const last = filtered[filtered.length - 1];
+      // Stay inside the closed workspace's tab — jump to its last
+      // sibling, or the new-workspace view if it was the tab's last.
+      const tid =
+        workspacesRef.current.find((w) => w.id === id)?.tabId ?? DEFAULT_TAB_ID;
+      const siblings = workspacesRef.current.filter(
+        (w) => w.id !== id && (w.tabId ?? DEFAULT_TAB_ID) === tid,
+      );
+      const last = siblings[siblings.length - 1];
       if (!last) setActiveView({ kind: "new" });
       else setActiveView({ kind: "workspace", id: last.id });
     }
@@ -833,6 +1056,19 @@ function App() {
       if (!(id in prev)) return prev;
       const { [id]: _removed, ...rest } = prev;
       return rest;
+    });
+    // Drop any per-tab "remembered active workspace" pointer at the closed
+    // id so it doesn't linger as dead state in localStorage. Reads of this
+    // map are already existence-checked, so this is hygiene, not a fix for
+    // a live bug.
+    setActiveWsByTab((prev) => {
+      let changed = false;
+      const next: Record<string, string> = {};
+      for (const [tid, wsId] of Object.entries(prev)) {
+        if (wsId === id) changed = true;
+        else next[tid] = wsId;
+      }
+      return changed ? next : prev;
     });
     invoke("unregister_workspace", { workspaceId: id }).catch((err) => {
       // The frontend has already removed the workspace from state, so
@@ -874,6 +1110,8 @@ function App() {
     activeWorkspaceIdRef: activeRef,
     workspacesRef,
     workspaces,
+    activeTabId,
+    activeTabIdRef,
     activePaneByWs,
     keymap,
     restartShortcutEnabled: settings.restartShortcutEnabled,
@@ -894,12 +1132,30 @@ function App() {
 
   const isNewView = view.kind === "new";
 
+  // Workspaces belonging to the active tab — what the sidebar shows.
+  // MainPanes still receives the full `workspaces` union so every tab's
+  // terminals stay mounted.
+  const tabWorkspaces = useMemo(
+    () => workspaces.filter((w) => (w.tabId ?? DEFAULT_TAB_ID) === activeTabId),
+    [workspaces, activeTabId],
+  );
+
   const activeWorkspace =
     view.kind === "workspace"
       ? (workspaces.find((w) => w.id === view.id) ?? null)
       : null;
+  // Number the workspace within ITS OWN tab, not the active tab. The two
+  // usually coincide, but a path that focuses a background-tab workspace
+  // (e.g. previewing a port from another tab) would otherwise miss in the
+  // active-tab list and render "Workspace 00" (pad2(-1 + 1)) in the header.
   const activeWorkspaceIdx = activeWorkspace
-    ? workspaces.findIndex((w) => w.id === activeWorkspace.id)
+    ? workspaces
+        .filter(
+          (w) =>
+            (w.tabId ?? DEFAULT_TAB_ID) ===
+            (activeWorkspace.tabId ?? DEFAULT_TAB_ID),
+        )
+        .findIndex((w) => w.id === activeWorkspace.id)
     : -1;
   const headerLabel = showSettings
     ? "Settings"
@@ -929,11 +1185,17 @@ function App() {
       />
       <div className="flex min-h-0 flex-1">
         <Sidebar
-          workspaces={workspaces}
+          workspaces={tabWorkspaces}
           activeWorkspaceId={view.kind === "workspace" ? view.id : null}
           isNewView={isNewView}
           unread={unreadWorkspaceIds}
           collapsed={collapsed}
+          tabs={tabs}
+          activeTabId={activeTabId}
+          onSelectTab={switchTab}
+          onAddTab={addTab}
+          onRenameTab={renameTab}
+          onRequestDeleteTab={requestDeleteTab}
           resizing={resizing}
           gutterDropTarget={gutterDropTarget}
           setGutterDropTarget={setGutterDropTarget}
@@ -978,7 +1240,7 @@ function App() {
           onUpdatePreset={updatePreset}
           onDeletePreset={deletePreset}
           onCancelWelcome={(() => {
-            const last = workspaces[workspaces.length - 1];
+            const last = tabWorkspaces[tabWorkspaces.length - 1];
             if (!last) return undefined;
             return () => setActiveView({ kind: "workspace", id: last.id });
           })()}
@@ -1009,6 +1271,30 @@ function App() {
           />
         );
       })()}
+      {tabToDelete &&
+        (() => {
+          const idx = Math.max(
+            0,
+            tabs.findIndex((t) => t.id === tabToDelete.id),
+          );
+          const count = workspaces.filter(
+            (w) => (w.tabId ?? DEFAULT_TAB_ID) === tabToDelete.id,
+          ).length;
+          return (
+            <ConfirmDialog
+              title={`Close ${tabLabel(tabToDelete, idx)}?`}
+              tone="danger"
+              confirmLabel="Close tab"
+              body={`This tab has ${count} workspace${
+                count === 1 ? "" : "s"
+              }. Closing it terminates ${
+                count === 1 ? "its" : "their"
+              } running shells. This can't be undone.`}
+              onCancel={() => setTabToDelete(null)}
+              onConfirm={confirmDeleteTab}
+            />
+          );
+        })()}
       {showPorts && view.kind === "workspace" && (
         <PortsPanel
           workspaceId={view.id}

@@ -17,6 +17,7 @@ import {
   parseChord,
 } from "./keybindings";
 import { isMac } from "./platform";
+import { DEFAULT_TAB_ID } from "./sessionPersist";
 import { reportInvokeError } from "./toast";
 import type { Session } from "./types";
 
@@ -34,6 +35,10 @@ type Args = {
   /// re-binds — those events happen rarely compared to the keystroke
   /// rate that drove the ref pattern in the first place.
   workspaces: Session[];
+  /// Active sidebar tab. Workspace navigation (next/prev/move, ⌘1-9) is
+  /// scoped to this tab's workspaces, matching what the sidebar shows.
+  activeTabId: string;
+  activeTabIdRef: MutableRefObject<string>;
   activePaneByWs: Record<string, string>;
   keymap: Keymap;
   restartShortcutEnabled: boolean;
@@ -73,6 +78,8 @@ export function useAppShortcuts({
   activeWorkspaceIdRef,
   workspacesRef,
   workspaces,
+  activeTabId,
+  activeTabIdRef,
   activePaneByWs,
   keymap,
   restartShortcutEnabled,
@@ -116,24 +123,30 @@ export function useAppShortcuts({
         return true;
       },
       "workspace.next": () => {
-        if (workspaces.length < 2) return false;
+        const members = workspaces.filter(
+          (w) => (w.tabId ?? DEFAULT_TAB_ID) === activeTabId,
+        );
+        if (members.length < 2) return false;
         const cur = activeWorkspaceIdRef.current;
         if (!cur) return false;
-        const idx = workspaces.findIndex((w) => w.id === cur);
+        const idx = members.findIndex((w) => w.id === cur);
         const target =
-          idx >= 0 ? workspaces[(idx + 1) % workspaces.length] : undefined;
+          idx >= 0 ? members[(idx + 1) % members.length] : undefined;
         if (!target) return false;
         activateWorkspace(target.id);
         return true;
       },
       "workspace.prev": () => {
-        if (workspaces.length < 2) return false;
+        const members = workspaces.filter(
+          (w) => (w.tabId ?? DEFAULT_TAB_ID) === activeTabId,
+        );
+        if (members.length < 2) return false;
         const cur = activeWorkspaceIdRef.current;
         if (!cur) return false;
-        const idx = workspaces.findIndex((w) => w.id === cur);
+        const idx = members.findIndex((w) => w.id === cur);
         const target =
           idx >= 0
-            ? workspaces[(idx - 1 + workspaces.length) % workspaces.length]
+            ? members[(idx - 1 + members.length) % members.length]
             : undefined;
         if (!target) return false;
         activateWorkspace(target.id);
@@ -142,8 +155,11 @@ export function useAppShortcuts({
       "workspace.moveUp": () => {
         const cur = activeWorkspaceIdRef.current;
         if (!cur) return false;
-        const list = workspacesRef.current;
-        const idx = list.findIndex((w) => w.id === cur);
+        // moveWorkspace indexes the active tab's filtered list.
+        const members = workspacesRef.current.filter(
+          (w) => (w.tabId ?? DEFAULT_TAB_ID) === activeTabIdRef.current,
+        );
+        const idx = members.findIndex((w) => w.id === cur);
         if (idx <= 0) return false;
         moveWorkspace(idx, idx - 1);
         return true;
@@ -151,11 +167,13 @@ export function useAppShortcuts({
       "workspace.moveDown": () => {
         const cur = activeWorkspaceIdRef.current;
         if (!cur) return false;
-        const list = workspacesRef.current;
-        const idx = list.findIndex((w) => w.id === cur);
-        if (idx < 0 || idx >= list.length - 1) return false;
+        const members = workspacesRef.current.filter(
+          (w) => (w.tabId ?? DEFAULT_TAB_ID) === activeTabIdRef.current,
+        );
+        const idx = members.findIndex((w) => w.id === cur);
+        if (idx < 0 || idx >= members.length - 1) return false;
         // moveWorkspace's `to` is the destination index in the pre-removal
-        // array (see its `adjusted = from < to ? to - 1 : to` math): the
+        // list (see its `adjusted = from < to ? to - 1 : to` math): the
         // down-one target is `idx + 2`.
         moveWorkspace(idx, idx + 2);
         return true;
@@ -272,8 +290,13 @@ export function useAppShortcuts({
         const m = /^Digit([1-9])$/.exec(e.code);
         const digit = m?.[1];
         if (digit) {
+          // Scope to the active tab's workspaces so ⌘1-9 matches the
+          // visible sidebar order, not the cross-tab global array.
+          const members = workspacesRef.current.filter(
+            (w) => (w.tabId ?? DEFAULT_TAB_ID) === activeTabIdRef.current,
+          );
           const idx = parseInt(digit, 10) - 1;
-          const target = workspacesRef.current[idx];
+          const target = members[idx];
           if (target) {
             e.preventDefault();
             e.stopPropagation();
@@ -311,6 +334,7 @@ export function useAppShortcuts({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [
     workspaces,
+    activeTabId,
     activePaneByWs,
     parsedKeymap,
     restartShortcutEnabled,
