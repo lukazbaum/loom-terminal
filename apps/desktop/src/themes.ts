@@ -273,6 +273,65 @@ const BUILTIN_PARCHMENT_LIGHT: Theme = {
   },
 };
 
+// Catppuccin Mocha — the popular pastel-on-deep-violet palette, mapped
+// onto Loom's tokens. Surfaces ramp Base -> Surface1; text uses
+// Text/Subtext0/Overlay1/Surface2; the accent is the canonical Mauve,
+// with Red and Green in the status slots. Official palette:
+// https://github.com/catppuccin/catppuccin
+const BUILTIN_CATPPUCCIN_MOCHA: Theme = {
+  id: "builtin-catppuccin-mocha",
+  name: "Catppuccin Mocha",
+  appearance: "dark",
+  isBuiltin: true,
+  createdAt: 0,
+  tokens: {
+    ink0: "#1e1e2e", // Base
+    ink1: "#232335",
+    ink2: "#2a2b3c",
+    ink3: "#313244", // Surface0
+    ink4: "#45475a", // Surface1
+    rule: "#3a3c4e",
+    paper: "#cdd6f4", // Text
+    muted: "#a6adc8", // Subtext0
+    faint: "#7f849c", // Overlay1
+    fade: "#585b70", // Surface2
+    amber: "#cba6f7", // Mauve (accent)
+    amberSoft: "#b48ee8",
+    amberDeep: "#9a73d4",
+    coral: "#f38ba8", // Red
+    mint: "#a6e3a1", // Green
+  },
+};
+
+// Rosé Pine (main) — the cozy desaturated violet-black palette. Surfaces
+// ramp Base -> Highlight Med; text uses Text/Subtle/Muted/Highlight High;
+// the accent is the canonical Iris, with Love and Foam in the status
+// slots. Official palette: https://rosepinetheme.com/palette/
+const BUILTIN_ROSE_PINE: Theme = {
+  id: "builtin-rose-pine",
+  name: "Rosé Pine",
+  appearance: "dark",
+  isBuiltin: true,
+  createdAt: 0,
+  tokens: {
+    ink0: "#191724", // Base
+    ink1: "#1b1926",
+    ink2: "#1f1d2e", // Surface
+    ink3: "#26233a", // Overlay
+    ink4: "#403d52", // Highlight Med
+    rule: "#302d44",
+    paper: "#e0def4", // Text
+    muted: "#908caa", // Subtle
+    faint: "#6e6a86", // Muted
+    fade: "#524f67", // Highlight High
+    amber: "#c4a7e7", // Iris (accent)
+    amberSoft: "#ad8fd6",
+    amberDeep: "#9678c2",
+    coral: "#eb6f92", // Love
+    mint: "#9ccfd8", // Foam
+  },
+};
+
 const BUILTIN_THEMES: readonly Theme[] = [
   BUILTIN_DARK,
   BUILTIN_LIGHT,
@@ -281,6 +340,8 @@ const BUILTIN_THEMES: readonly Theme[] = [
   BUILTIN_MOSS_DARK,
   BUILTIN_MIDNIGHT_VIOLET,
   BUILTIN_BERRY_CREAM,
+  BUILTIN_CATPPUCCIN_MOCHA,
+  BUILTIN_ROSE_PINE,
   BUILTIN_PARCHMENT_LIGHT,
 ];
 
