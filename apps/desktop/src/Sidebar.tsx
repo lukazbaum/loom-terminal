@@ -1,5 +1,6 @@
 import { pad2 } from "./format";
-import type { Session } from "./types";
+import { TabSwitcher } from "./TabSwitcher";
+import type { Session, WorkspaceTabMeta } from "./types";
 import { useActionChord } from "./useActionChord";
 import {
   ActiveRail,
@@ -22,6 +23,15 @@ type Props = {
   isNewView: boolean;
   unread: Set<string>;
   collapsed: boolean;
+
+  /// Sidebar tabs ("pages"). The workspace list above is already filtered
+  /// to `activeTabId`; this strip switches between tabs and manages them.
+  tabs: WorkspaceTabMeta[];
+  activeTabId: string;
+  onSelectTab: (id: string) => void;
+  onAddTab: () => void;
+  onRenameTab: (id: string, name: string) => void;
+  onRequestDeleteTab: (id: string) => void;
   /// True while the user is dragging the right-edge resize handle.
   /// Drives the `transition-[width]` toggle on the nav element so the
   /// drag feels instant instead of laggy.
@@ -62,6 +72,12 @@ export function Sidebar({
   isNewView,
   unread,
   collapsed,
+  tabs,
+  activeTabId,
+  onSelectTab,
+  onAddTab,
+  onRenameTab,
+  onRequestDeleteTab,
   resizing,
   gutterDropTarget,
   setGutterDropTarget,
@@ -283,6 +299,20 @@ export function Sidebar({
           />
         )}
       </div>
+
+      {/* Tab ("pages") switcher — a small dropdown above the collapse
+          footer. Hidden when collapsed: the 56px rail has no room for it,
+          matching how labels / close buttons are dropped in that mode. */}
+      {!collapsed && (
+        <TabSwitcher
+          tabs={tabs}
+          activeTabId={activeTabId}
+          onSelect={onSelectTab}
+          onAdd={onAddTab}
+          onRename={onRenameTab}
+          onRequestDelete={onRequestDeleteTab}
+        />
+      )}
 
       <div
         className={`shrink-0 border-t border-rule ${

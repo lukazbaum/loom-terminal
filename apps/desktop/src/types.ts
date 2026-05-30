@@ -25,11 +25,25 @@ export type Pane = {
   sessionAgent?: SessionAgent;
 };
 
+/// A sidebar "tab" (a.k.a. page): a named bucket that owns its own
+/// workspace list. Workspaces reference their tab via `Session.tabId`;
+/// the tab list itself only needs id + optional custom name (the auto
+/// label "Tab NN" is derived from position when name is unset).
+export type WorkspaceTabMeta = {
+  id: string;
+  name?: string;
+};
+
 export type Session = {
   id: string;
   path: string;
   panes: Pane[];
   name?: string;
+  /// Which sidebar tab this workspace belongs to. Optional only at the
+  /// type level for the reducer's `add` path and legacy snapshots — the
+  /// persistence layer assigns every workspace a concrete tab id on load
+  /// (migrating pre-tabs snapshots into a single default tab).
+  tabId?: string;
   /// User-pinned pane ids. Pinned panes can't be closed via the close ×
   /// or ⌘W until they are explicitly unpinned.
   pinnedPaneIds?: string[];

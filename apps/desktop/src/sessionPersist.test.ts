@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
 import {
+  DEFAULT_TAB_ID,
   isSessionAgent,
   loadSession,
   parsePersistedPane,
@@ -185,7 +186,14 @@ describe("loadSession", () => {
   test("returns EMPTY when payload is malformed JSON", () => {
     localStorage.setItem("loom.session.v1", "{not json");
     const s = loadSession();
-    expect(s).toEqual({ v: 1, workspaces: [] });
+    // EMPTY still carries a usable default tab so the app always has a
+    // place to put workspaces, even after a corrupt snapshot.
+    expect(s).toEqual({
+      v: 1,
+      workspaces: [],
+      tabs: [{ id: DEFAULT_TAB_ID }],
+      activeTabId: DEFAULT_TAB_ID,
+    });
   });
 
   test("returns EMPTY when payload is JSON-valid but not an object", () => {
@@ -404,6 +412,85 @@ describe("loadSession", () => {
     expect(s.workspaces[0]?.panes[0]?.sessionAgent).toBe("claude");
     expect(s.workspaces[0]?.panes[1]?.kind).toBe("preview");
     expect(s.workspaces[0]?.panes[1]?.previewUrl).toBe("http://localhost:5173");
+  });
+});
+
+// ─── tab migration ──────────────────────────────────────────────────
+//
+// Tabs were added after the first releases, so loadSession must migrate
+// pre-tabs snapshots into a single default tab without losing workspaces,
+// and repair dangling tab references.
+
+describe("tab migration", () => {
+  test("EMPTY localStorage yields exactly one default tab", () => {
+    const s = loadSession();
+    expect(s.tabs).toHaveLength(1);
+    expect(s.activeTabId).toBe(s.tabs[0]?.id);
+  });
+
+  test("pre-tabs snapshot gets a default tab and all workspaces join it", () => {
+    localStorage.setItem(
+      "loom.session.v1",
+      JSON.stringify({
+        v: 1,
+        workspaces: [
+          { id: "ws_1", path: "/tmp/a", panes: [] },
+          { id: "ws_2", path: "/tmp/b", panes: [] },
+        ],
+      }),
+    );
+    const s = loadSession();
+    expect(s.tabs).toHaveLength(1);
+    const tabId = s.tabs[0]!.id;
+    expect(s.workspaces.map((w) => w.tabId)).toEqual([tabId, tabId]);
+    expect(s.activeTabId).toBe(tabId);
+  });
+
+  test("round-trips multiple tabs + per-workspace membership", () => {
+    saveSessionShape(
+      [
+        { id: "ws_1", path: "/tmp/a", tabId: "t1", panes: [] },
+        { id: "ws_2", path: "/tmp/b", tabId: "t2", panes: [] },
+      ],
+      {
+        activeWorkspaceId: "ws_1",
+        tabs: [{ id: "t1", name: "Work" }, { id: "t2" }],
+        activeTabId: "t2",
+      },
+    );
+    const s = loadSession();
+    expect(s.tabs.map((t) => t.id)).toEqual(["t1", "t2"]);
+    expect(s.tabs[0]?.name).toBe("Work");
+    expect(s.workspaces.find((w) => w.id === "ws_1")?.tabId).toBe("t1");
+    expect(s.workspaces.find((w) => w.id === "ws_2")?.tabId).toBe("t2");
+    expect(s.activeTabId).toBe("t2");
+  });
+
+  test("rehomes a workspace whose tab no longer exists to the first tab", () => {
+    localStorage.setItem(
+      "loom.session.v1",
+      JSON.stringify({
+        v: 1,
+        tabs: [{ id: "t1" }],
+        activeTabId: "t1",
+        workspaces: [{ id: "ws_1", path: "/tmp/a", tabId: "ghost", panes: [] }],
+      }),
+    );
+    const s = loadSession();
+    expect(s.workspaces[0]?.tabId).toBe("t1");
+  });
+
+  test("falls back activeTabId to the first tab when the saved one is gone", () => {
+    localStorage.setItem(
+      "loom.session.v1",
+      JSON.stringify({
+        v: 1,
+        tabs: [{ id: "t1" }, { id: "t2" }],
+        activeTabId: "deleted",
+        workspaces: [],
+      }),
+    );
+    expect(loadSession().activeTabId).toBe("t1");
   });
 });
 

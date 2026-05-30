@@ -11,7 +11,7 @@ import {
   saveSessionShape,
 } from "./sessionPersist";
 import { pushToast } from "./toast";
-import type { Session } from "./types";
+import type { Session, WorkspaceTabMeta } from "./types";
 
 type Args = {
   /// Snapshot loaded once at App mount via `loadSession()`. The on-mount
@@ -26,6 +26,14 @@ type Args = {
   /// Active pane per workspace — saved with `activeWorkspaceId` under
   /// the small selection key.
   activePaneByWs: Record<string, string>;
+  /// Sidebar tabs (id + optional name), in display order. Part of the
+  /// shape save so renaming / adding / removing a tab persists even when
+  /// no workspace changed.
+  tabs: WorkspaceTabMeta[];
+  /// Currently-open tab + per-tab last-active workspace. Selection-sized,
+  /// so they ride the fast selection save.
+  activeTabId: string;
+  activeWsByTab: Record<string, string>;
 };
 
 /// All session-persistence side effects, lifted out of App.tsx:
@@ -51,6 +59,9 @@ export function useSessionPersistence({
   workspaces,
   activeWorkspaceId,
   activePaneByWs,
+  tabs,
+  activeTabId,
+  activeWsByTab,
 }: Args): void {
   // Re-register restored workspaces with the backend so MCP tools can
   // find them. Idempotent — safe to call repeatedly. Runs once per
@@ -106,6 +117,12 @@ export function useSessionPersistence({
   // this one.
   const activeIdRef = useRef(activeWorkspaceId);
   activeIdRef.current = activeWorkspaceId;
+  // activeTabId is selection-sized and saved by the selection effect, but
+  // it also rides along in the shape blob so a shape-triggering change
+  // (e.g. launching a workspace) stamps the right open-tab. Read via ref
+  // so a bare tab switch doesn't re-arm this heavier save.
+  const activeTabIdRef = useRef(activeTabId);
+  activeTabIdRef.current = activeTabId;
   useEffect(() => {
     const handle = window.setTimeout(async () => {
       let ids: Record<string, string> = {};
@@ -120,6 +137,7 @@ export function useSessionPersistence({
           id: w.id,
           name: w.name,
           path: w.path,
+          tabId: w.tabId,
           pinnedPaneIds: w.pinnedPaneIds,
           gridCols: w.gridCols,
           gridRows: w.gridRows,
@@ -150,11 +168,17 @@ export function useSessionPersistence({
             };
           }),
         })),
-        { activeWorkspaceId: activeIdRef.current },
+        {
+          activeWorkspaceId: activeIdRef.current,
+          tabs,
+          activeTabId: activeTabIdRef.current,
+        },
       );
     }, 1000);
     return () => window.clearTimeout(handle);
-  }, [workspaces]);
+    // `tabs` is in the deps so a tab add / rename / remove persists even
+    // when the workspace shape itself didn't change.
+  }, [workspaces, tabs]);
 
   // Selection persistence — tiny payload (which pane is active per
   // workspace, which workspace is on top). Separate key so a pane click
@@ -164,10 +188,12 @@ export function useSessionPersistence({
       saveSessionSelection({
         activeWorkspaceId,
         activePaneByWs,
+        activeTabId,
+        activeWsByTab,
       });
     }, 200);
     return () => window.clearTimeout(handle);
-  }, [activeWorkspaceId, activePaneByWs]);
+  }, [activeWorkspaceId, activePaneByWs, activeTabId, activeWsByTab]);
 
   // Belt-and-suspenders: synchronous flush on unload. No async
   // round-trip possible here, so we save whatever session ids are
@@ -188,6 +214,7 @@ export function useSessionPersistence({
         id: w.id,
         name: w.name,
         path: w.path,
+        tabId: w.tabId,
         pinnedPaneIds: w.pinnedPaneIds,
         gridCols: w.gridCols,
         gridRows: w.gridRows,
@@ -213,6 +240,9 @@ export function useSessionPersistence({
       })),
       activeWorkspaceId,
       activePaneByWs,
+      tabs,
+      activeTabId,
+      activeWsByTab,
     });
   };
   useEffect(() => {
